@@ -1,302 +1,196 @@
 // src/App.tsx
-
 import React, { useState, useEffect } from 'react';
-import './App.css';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import DownloadForm from './components/DownloadForm';
 import ProgressBar from './components/ProgressBar';
 import LicenseInfo from './components/LicenseInfo';
+import Header from './components/Header';
+import Footer from './components/Footer';
+import Tabs from './components/Tabs';
+import Alert from './components/Alert';
 
-// Import Tauri API correctly for v2
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+// Type definitions
+export type TabType = 'download' | 'license';
+export type LicenseStatus = 'checking' | 'free' | 'pro';
 
-// Define app state type
-interface AppState {
-  licenseStatus: 'checking' | 'free' | 'pro';
-  isDownloading: boolean;
-  downloadProgress: number;
-  activeTab: 'download' | 'license';
-  errorMessage: string;
-  successMessage: string;
+export interface DownloadParams {
+  url: string;
+  quality: string;
+  format: string;
+  startTime?: string;
+  endTime?: string;
+  usePlaylist: boolean;
+  downloadSubtitles: boolean;
+  outputDir?: string;
 }
 
-// Main App component with improved error handling
 const App: React.FC = () => {
-  // Initialize state with proper typing
-  const [state, setState] = useState<AppState>({
-    licenseStatus: 'checking',
-    isDownloading: false,
-    downloadProgress: 0,
-    activeTab: 'download',
-    errorMessage: '',
-    successMessage: ''
-  });
+  // Application state
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>('checking');
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [activeTab, setActiveTab] = useState<TabType>('download');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [downloadInfo, setDownloadInfo] = useState<{
+    fileName?: string;
+    fileSize?: number;
+    speed?: number;
+    timeRemaining?: number;
+  }>({});
 
-  // Check license status on mount - FIXED: changed check_license to is_pro
+  // Check license status on mount
   useEffect(() => {
     const checkLicense = async () => {
       try {
-        // Fixed: using is_pro instead of check_license
         const isPro = await invoke<boolean>('is_pro');
-        setState(prev => ({ ...prev, licenseStatus: isPro ? 'pro' : 'free' }));
-      } catch (error) {
-        console.error('Failed to check license:', error);
-        setState(prev => ({ 
-          ...prev, 
-          licenseStatus: 'free',
-          errorMessage: `License check failed: ${error}. Using free version.` 
-        }));
+        setLicenseStatus(isPro ? 'pro' : 'free');
+      } catch (err) {
+        console.error('Failed to check license:', err);
+        setLicenseStatus('free');
+        setError('License check failed. Using free version.');
       }
     };
 
     checkLicense();
   }, []);
 
-  // Listen for download progress events from Rust backend
-  useEffect(() => {
-    const unsubscribe = listen<number>('download-progress', (event) => {
-      setState(prev => ({ ...prev, downloadProgress: event.payload }));
-
-      // When download completes
-      if (event.payload >= 100) {
-        setTimeout(() => {
-          setState(prev => ({ 
-            ...prev, 
-            isDownloading: false,
-            successMessage: 'Download completed successfully!'
-          }));
-        }, 2000); // Give time for processing to complete
-      }
-    });
-
-    // Cleanup listener on unmount
-    return () => {
-      unsubscribe.then(unsub => unsub());
-    };
-  }, []);
-
-  // Check for pending downloads on mount - we'll keep this but handle errors safely
+  // Check for pending downloads
   useEffect(() => {
     const checkPendingDownloads = async () => {
       try {
-        // Try to call get_progress instead since that's what's registered
         const progress = await invoke<number>('get_progress');
         if (progress > 0) {
-          setState(prev => ({ 
-            ...prev, 
-            isDownloading: true,
-            downloadProgress: progress
-          }));
+          setIsDownloading(true);
+          setDownloadProgress(progress);
         }
-      } catch (error) {
-        console.error('Failed to check pending downloads:', error);
-        // Continue without setting error state to avoid confusing the user
+      } catch (err) {
+        console.error('Failed to check pending downloads:', err);
       }
     };
 
     checkPendingDownloads();
   }, []);
 
-  // Handle download form submission - FIXED: changed download_video to start_download
-  const handleDownloadStart = async (downloadParams: {
-    url: string;
-    quality: string;
-    format: string;
-    startTime?: string;
-    endTime?: string;
-    usePlaylist: boolean;
-    downloadSubtitles: boolean;
-    outputDir?: string;
-  }) => {
-    // Clear previous messages
-    setState(prev => ({ 
-      ...prev, 
-      errorMessage: '',
-      successMessage: ''
-    }));
+  // Listen for download progress events
+  useEffect(() => {
+    const setupListener = async () => {
+      try {
+        const unlisten = await listen<{
+          progress: number;
+          fileName?: string;
+          fileSize?: number;
+          speed?: number;
+          timeRemaining?: number;
+        }>('download-progress', (event) => {
+          const { progress, ...info } = event.payload;
+          setDownloadProgress(progress);
+          setDownloadInfo(info);
+
+          // When download completes
+          if (progress >= 100) {
+            setTimeout(() => {
+              setIsDownloading(false);
+              setSuccess('Download completed successfully!');
+            }, 2000);
+          }
+        });
+
+        return unlisten;
+      } catch (err) {
+        console.error('Failed to set up event listener:', err);
+        return () => {};
+      }
+    };
+
+    const unsubscribe = setupListener();
+    return () => {
+      unsubscribe.then(unlisten => {
+        unlisten();
+      }).catch(err => console.error('Failed to unsubscribe:', err));
+    };
+  }, []);
+
+  // Handle download start
+  const handleDownloadStart = async (params: DownloadParams) => {
+    setError('');
+    setSuccess('');
 
     try {
-      setState(prev => ({ ...prev, isDownloading: true, downloadProgress: 0 }));
-      
-      // Fixed: using start_download instead of download_video
+      setIsDownloading(true);
+      setDownloadProgress(0);
+
       await invoke('start_download', {
-        url: downloadParams.url,
-        quality: downloadParams.quality || undefined,
-        format: downloadParams.format,
-        startTime: downloadParams.startTime || undefined,
-        endTime: downloadParams.endTime || undefined,
-        usePlaylist: downloadParams.usePlaylist,
-        downloadSubtitles: downloadParams.downloadSubtitles,
-        outputDir: downloadParams.outputDir || undefined
+        url: params.url,
+        quality: params.quality || undefined,
+        format: params.format,
+        startTime: params.startTime || undefined,
+        endTime: params.endTime || undefined,
+        usePlaylist: params.usePlaylist,
+        downloadSubtitles: params.downloadSubtitles,
+        outputDir: params.outputDir || undefined,
+        progressState: {} // This is handled by the backend
       });
-      
-      // Note: We don't set isDownloading to false here because we'll
-      // receive progress events that will update the state
-    } catch (error) {
-      console.error('Download failed:', error);
-      setState(prev => ({ 
-        ...prev, 
-        isDownloading: false,
-        errorMessage: `Download failed: ${error}`
-      }));
+    } catch (err) {
+      console.error('Download failed:', err);
+      setIsDownloading(false);
+      setError(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
-  // Handle license activation - FIXED: changed activate_license_key to activate_license
-  const handleLicenseActivation = async (licenseKey: string, email: string) => {
-    // Clear previous messages
-    setState(prev => ({ 
-      ...prev, 
-      errorMessage: '',
-      successMessage: ''
-    }));
-
-    try {
-      // Fixed: using activate_license instead of activate_license_key
-      const result = await invoke<string>('activate_license', {
-        licenseKey,
-        email
-      });
-      
-      setState(prev => ({ 
-        ...prev, 
-        licenseStatus: 'pro',
-        successMessage: result || 'License activated successfully!'
-      }));
-    } catch (error) {
-      console.error('License activation failed:', error);
-      setState(prev => ({ 
-        ...prev, 
-        errorMessage: `License activation failed: ${error}`
-      }));
-    }
-  };
-
-  // Dismiss messages
-  const dismissMessage = (type: 'error' | 'success') => {
-    if (type === 'error') {
-      setState(prev => ({ ...prev, errorMessage: '' }));
-    } else {
-      setState(prev => ({ ...prev, successMessage: '' }));
+  // Handle license activation
+  const handleLicenseActivation = async (success: boolean) => {
+    if (success) {
+      setLicenseStatus('pro');
+      setSuccess('License activated successfully!');
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <header className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-2">
-            Rustloader
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Advanced Video Downloader
-          </p>
+    <div className="h-screen w-screen overflow-hidden bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+      <div className="flex flex-col h-full w-full max-w-app mx-auto">
+        <Header licenseStatus={licenseStatus} />
+        
+        <main className="flex-1 overflow-auto p-4">
+          {/* Alerts */}
+          {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
+          {success && <Alert type="success" message={success} onDismiss={() => setSuccess('')} />}
           
-          {/* License Badge */}
-          <div className="mt-3">
-            <span className={`inline-block px-3 py-1 text-sm font-medium text-white rounded-full ${
-              state.licenseStatus === 'checking' ? 'bg-gray-500' :
-              state.licenseStatus === 'pro' ? 'bg-yellow-500' : 'bg-blue-500'
-            }`}>
-              {state.licenseStatus === 'checking' ? 'CHECKING LICENSE...' :
-               state.licenseStatus === 'pro' ? 'PRO VERSION' : 'FREE VERSION'}
-            </span>
-          </div>
-        </header>
-        
-        {/* Error and Success Messages */}
-        {state.errorMessage && (
-          <div className="mb-6 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
-            <strong className="font-bold">Error! </strong>
-            <span className="block sm:inline">{state.errorMessage}</span>
-            <span 
-              className="absolute top-0 bottom-0 right-0 px-4 py-3 cursor-pointer"
-              onClick={() => dismissMessage('error')}
-            >
-              <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                <title>Close</title>
-                <path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/>
-              </svg>
-            </span>
-          </div>
-        )}
-        
-        {state.successMessage && (
-          <div className="mb-6 bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative" role="alert">
-            <strong className="font-bold">Success! </strong>
-            <span className="block sm:inline">{state.successMessage}</span>
-            <span 
-              className="absolute top-0 bottom-0 right-0 px-4 py-3 cursor-pointer"
-              onClick={() => dismissMessage('success')}
-            >
-              <svg className="fill-current h-6 w-6 text-green-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                <title>Close</title>
-                <path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/>
-              </svg>
-            </span>
-          </div>
-        )}
-        
-        {/* Tab Navigation */}
-        <div className="flex border-b border-gray-200 dark:border-gray-700 mb-6">
-          <button
-            className={`py-2 px-4 font-medium text-sm ${
-              state.activeTab === 'download'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-            }`}
-            onClick={() => setState(prev => ({ ...prev, activeTab: 'download' }))}
-          >
-            Download
-          </button>
-          <button
-            className={`py-2 px-4 font-medium text-sm ${
-              state.activeTab === 'license'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-            }`}
-            onClick={() => setState(prev => ({ ...prev, activeTab: 'license' }))}
-          >
-            License
-          </button>
-        </div>
-        
-        {/* Main Content */}
-        <div className="space-y-6">
+          {/* Tabs */}
+          <Tabs activeTab={activeTab} onChange={setActiveTab} />
+          
           {/* Progress Bar (shown during download) */}
-          {state.isDownloading && (
-            <ProgressBar progress={state.downloadProgress} />
+          {isDownloading && (
+            <div className="mb-4">
+              <ProgressBar 
+                progress={downloadProgress} 
+                fileName={downloadInfo.fileName}
+                fileSize={downloadInfo.fileSize}
+                speed={downloadInfo.speed}
+                timeRemaining={downloadInfo.timeRemaining}
+              />
+            </div>
           )}
           
-          {/* Active Tab Content */}
-          {state.activeTab === 'download' ? (
-            <DownloadForm 
-              isPro={state.licenseStatus === 'pro'} 
-              onDownloadStart={handleDownloadStart}
-              disabled={state.isDownloading}
-            />
-          ) : (
-            <LicenseInfo 
-              isProVersion={state.licenseStatus === 'pro'} 
-              onActivationComplete={(success) => {
-                if (success) {
-                  setState(prev => ({ ...prev, licenseStatus: 'pro' }));
-                }
-              }}
-            />
-          )}
-          
-          {/* Info Card */}
-          <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg shadow-sm">
-            <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-1">
-              Rustloader v1.0.0
-            </h3>
-            <p className="text-xs text-blue-600 dark:text-blue-300">
-              Advanced Video Downloader built with Rust and React
-            </p>
+          {/* Tab Content */}
+          <div className="mt-4">
+            {activeTab === 'download' ? (
+              <DownloadForm 
+                isPro={licenseStatus === 'pro'} 
+                onDownloadStart={handleDownloadStart}
+                disabled={isDownloading}
+              />
+            ) : (
+              <LicenseInfo 
+                isProVersion={licenseStatus === 'pro'} 
+                onActivationComplete={handleLicenseActivation}
+              />
+            )}
           </div>
-        </div>
+        </main>
+        
+        <Footer />
       </div>
     </div>
   );

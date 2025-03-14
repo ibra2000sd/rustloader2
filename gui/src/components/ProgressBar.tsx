@@ -1,3 +1,4 @@
+// src/components/ProgressBar.tsx
 import React from 'react';
 
 interface ProgressBarProps {
@@ -40,34 +41,24 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
     return `${hours}h ${mins}m`;
   };
   
-  // Get color based on progress
-  const getProgressColor = (): string => {
-    if (normalizedProgress < 30) return 'bg-blue-500';
-    if (normalizedProgress < 70) return 'bg-green-500';
-    return 'bg-yellow-500';
-  };
-  
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-      {/* File name and progress percentage */}
-      <div className="flex justify-between items-center mb-2">
-        <div className="truncate max-w-[70%] text-sm font-medium text-gray-800 dark:text-gray-200">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-sm font-medium truncate max-w-[70%] text-gray-700 dark:text-gray-200">
           {fileName}
-        </div>
-        <div className="text-sm font-medium text-blue-600 dark:text-blue-400">
+        </h3>
+        <span className="text-sm font-medium text-primary-600 dark:text-primary-400">
           {normalizedProgress.toFixed(1)}%
-        </div>
+        </span>
       </div>
       
-      {/* Progress bar */}
-      <div className="h-2.5 bg-gray-200 dark:bg-gray-700 rounded-full mb-3">
+      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 mb-3">
         <div 
-          className={`h-2.5 rounded-full ${getProgressColor()}`} 
-          style={{ width: `${normalizedProgress}%` }}
+          className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full transition-all duration-300"
+          style={{ width: `${normalizedProgress}%` }} 
         ></div>
       </div>
       
-      {/* Additional details */}
       <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 dark:text-gray-400">
         <div>
           <span className="font-medium">Size:</span> {formatBytes(fileSize)}
@@ -81,7 +72,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
       </div>
       
       {normalizedProgress >= 100 && (
-        <div className="mt-3 text-sm text-green-600 dark:text-green-400 font-medium">
+        <div className="mt-2 text-sm text-green-600 dark:text-green-400 font-medium">
           Download complete! Processing file...
         </div>
       )}
