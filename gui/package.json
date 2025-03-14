@@ -1,0 +1,13 @@
+{
+  "name": "rustloader-gui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "serve -s src",
+    "build": "echo 'No build step required'"
+  },
+  "devDependencies": {
+    "serve": "^14.2.1"
+  }
+}
