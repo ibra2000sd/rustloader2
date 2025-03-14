@@ -1,13 +1,14 @@
 // src/App.tsx
 
+// Replace your existing imports at the top of App.tsx with:
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import DownloadForm from './components/DownloadForm';
 import ProgressBar from './components/ProgressBar';
 import LicenseInfo from './components/LicenseInfo';
 
-// Import Tauri API functions
-import { invoke } from '@tauri-apps/api/tauri';
+// Import Tauri API correctly for v2
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 // Define app state type

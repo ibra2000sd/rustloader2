@@ -1,8 +1,11 @@
 // src/components/DownloadForm.tsx
 
+// Replace your existing imports at the top of DownloadForm.tsx with:
 import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
-import { open } from '@tauri-apps/api/dialog';
+
+import { invoke } from '@tauri-apps/api/core';
+import { dialog } from '@tauri-apps/api';
+
 import './DownloadForm.css';
 
 interface DownloadFormProps {

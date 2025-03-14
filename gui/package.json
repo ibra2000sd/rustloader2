@@ -4,10 +4,23 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "serve -s src",
-    "build": "echo 'No build step required'"
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
   },
   "devDependencies": {
-    "serve": "^14.2.1"
+    "@tauri-apps/cli": "^2.3.1",
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "serve": "^14.2.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }
