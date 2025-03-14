@@ -1,4 +1,3 @@
-// src/components/DownloadForm.tsx
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -28,8 +27,50 @@ interface VideoInfo {
   uploadDate?: string;
 }
 
-const DownloadForm: React.FC<DownloadFormProps> = ({ 
-  isPro, 
+// URL validation utilities
+const isValidUrl = (string: string): boolean => {
+  try {
+    const url = new URL(string);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+};
+
+const isVideoUrl = (string: string): boolean => {
+  try {
+    const url = new URL(string);
+    const videoHosts = [
+      'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com',
+      'twitch.tv', 'tiktok.com', 'facebook.com', 'instagram.com'
+    ];
+    return videoHosts.some((host) => url.hostname.includes(host));
+  } catch (_) {
+    return false;
+  }
+};
+
+// Extract YouTube video ID properly
+const extractYouTubeVideoId = (url: string): string | null => {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/watch\?.*v=)([^#&?\s]*)/,
+    /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match && match[1]?.length === 11) {
+      return match[1];
+    }
+    if (match && match[2]?.length === 11) {
+      return match[2];
+    }
+  }
+  return null;
+};
+
+const DownloadForm: React.FC<DownloadFormProps> = ({
+  isPro,
   onDownloadStart,
   disabled = false
 }) => {
@@ -50,6 +91,9 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [availablePaths, setAvailablePaths] = useState<string[]>([]);
 
+  // Track whether URL is valid
+  const [isUrlValid, setIsUrlValid] = useState(false);
+
   // Update quality if isPro changes
   useEffect(() => {
     if (!isPro && (quality === '1080' || quality === '2160')) {
@@ -61,22 +105,20 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
   useEffect(() => {
     const loadPaths = async () => {
       try {
-        // Try to get paths from backend, fall back to default paths if needed
         let paths: string[] = [];
         try {
           paths = await invoke<string[]>('list_download_paths');
         } catch (err) {
           console.warn('Could not retrieve download paths from backend, using defaults');
-          // Default paths
           const homePath = process.env.HOME || '';
           paths = [
             `${homePath}/Downloads/rustloader/videos`,
             `${homePath}/Downloads/rustloader/audio`
           ].filter(Boolean);
         }
-        
+
         setAvailablePaths(paths);
-        
+
         // Set default output directory to first available path
         if (paths.length > 0 && !outputDir) {
           setOutputDir(paths[0]);
@@ -85,7 +127,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
         console.error('Failed to load available paths:', error);
       }
     };
-    
+
     loadPaths();
   }, [outputDir]);
 
@@ -93,6 +135,19 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
   useEffect(() => {
     setError('');
   }, [url]);
+
+  // Handle URL input changes
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newUrl = e.target.value;
+    setUrl(newUrl);
+
+    // Update URL validity
+    const valid = isValidUrl(newUrl) && isVideoUrl(newUrl);
+    setIsUrlValid(valid);
+
+    // Clear any existing error
+    if (error) setError('');
+  };
 
   // Format duration from seconds to MM:SS
   const formatDuration = (seconds?: number): string => {
@@ -102,39 +157,58 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Fetch video info
+  // Fetch video info with improved validation and extraction
   const fetchVideoInfo = async (): Promise<void> => {
-    if (!url || url.length < 10) {
+    if (!url || !isValidUrl(url)) {
       setError('Please enter a valid URL');
       return;
     }
-    
+
     setIsLoading(true);
     setError('');
     setVideoInfo(null);
-    
+
     try {
-      // We'll generate mock data since the backend might not have this endpoint
-      // In a real implementation, you'd call a backend function
-      
+      // Extract ID for YouTube URLs
+      const videoId =
+        url.includes('youtube.com') || url.includes('youtu.be')
+          ? extractYouTubeVideoId(url)
+          : null;
+
+      // For demonstration, we mock some data
+      let mockTitle = 'Unknown Video';
+
+      if (videoId) {
+        mockTitle = `YouTube Video: ${videoId}`;
+        console.log(`Extracted YouTube ID: ${videoId}`);
+      } else {
+        // For non-YouTube URLs, attempt to extract domain
+        try {
+          mockTitle = `Video from ${new URL(url).hostname}`;
+        } catch {
+          mockTitle = 'Unknown Video Source';
+        }
+      }
+
       // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 800));
-      
-      // Mock video info based on URL
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
       const mockVideoInfo: VideoInfo = {
-        title: url.includes('youtube') 
-          ? `YouTube Video: ${url.split('v=').pop()?.substring(0, 8) || 'Unknown'}` 
-          : `Video from ${new URL(url).hostname}`,
-        uploader: "Content Creator",
-        duration: 325, // ~5.5 minutes
+        title: mockTitle,
+        uploader: 'Content Creator',
+        duration: 325,
         views: 12500,
         likes: 1050,
-        uploadDate: "2025-03-01"
+        uploadDate: '2025-03-01'
       };
-      
+
       setVideoInfo(mockVideoInfo);
     } catch (err) {
-      setError(`Failed to fetch video info: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setError(
+        `Failed to fetch video info: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
     } finally {
       setIsLoading(false);
     }
@@ -146,14 +220,18 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
       const selected = await open({
         directory: true,
         multiple: false,
-        title: 'Select Download Directory',
+        title: 'Select Download Directory'
       });
-  
+
       if (selected && typeof selected === 'string') {
         setOutputDir(selected);
       }
     } catch (err) {
-      setError(`Failed to select directory: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setError(
+        `Failed to select directory: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
     }
   };
 
@@ -167,22 +245,22 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
   // Handle form submission
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
-    
+
     if (!url) {
       setError('Please enter a URL');
       return;
     }
-    
+
     if (startTime && !validateTimeFormat(startTime)) {
       setError('Invalid start time format. Use HH:MM:SS');
       return;
     }
-    
+
     if (endTime && !validateTimeFormat(endTime)) {
       setError('Invalid end time format. Use HH:MM:SS');
       return;
     }
-    
+
     onDownloadStart({
       url,
       quality,
@@ -204,16 +282,21 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
           onDismiss={() => setError('')}
         />
       )}
-      
+
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Video URL Input */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label htmlFor="video-url" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label
+              htmlFor="video-url"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
               Video URL
             </label>
             {isLoading && (
-              <span className="text-xs text-primary-500 animate-pulse">Loading...</span>
+              <span className="text-xs text-primary-500 animate-pulse">
+                Loading...
+              </span>
             )}
           </div>
           <div className="flex space-x-2">
@@ -221,22 +304,32 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
               id="video-url"
               type="text"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onBlur={() => url && fetchVideoInfo()}
+              onChange={handleUrlChange}
+              onBlur={() => url && isUrlValid && fetchVideoInfo()}
               placeholder="https://www.youtube.com/watch?v=..."
               disabled={isLoading || disabled}
-              className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-primary-500 focus:border-primary-500 disabled:opacity-70"
+              className={`flex-1 p-2 border ${
+                url && !isUrlValid
+                  ? 'border-red-300 dark:border-red-600'
+                  : 'border-gray-300 dark:border-gray-600'
+              } rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-primary-500 focus:border-primary-500 disabled:opacity-70`}
               required
             />
             <button
               type="button"
               onClick={fetchVideoInfo}
-              disabled={isLoading || disabled || !url}
+              disabled={isLoading || disabled || !url || !isUrlValid}
               className="px-3 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md text-sm transition-colors disabled:bg-primary-400 disabled:cursor-not-allowed"
             >
               Fetch Info
             </button>
           </div>
+          {/* Optional helper message for invalid URL */}
+          {url && !isUrlValid && (
+            <p className="mt-1 text-xs text-red-500">
+              Please enter a valid video URL (YouTube, Vimeo, etc.)
+            </p>
+          )}
         </div>
 
         {/* Video Info Preview */}
@@ -246,9 +339,13 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
               {videoInfo.title || 'Unknown Title'}
             </h3>
             <div className="flex flex-wrap gap-3 text-xs text-gray-600 dark:text-gray-400">
-              {videoInfo.duration && <span>Duration: {formatDuration(videoInfo.duration)}</span>}
+              {videoInfo.duration && (
+                <span>Duration: {formatDuration(videoInfo.duration)}</span>
+              )}
               {videoInfo.uploader && <span>By: {videoInfo.uploader}</span>}
-              {videoInfo.views && <span>Views: {videoInfo.views.toLocaleString()}</span>}
+              {videoInfo.views && (
+                <span>Views: {videoInfo.views.toLocaleString()}</span>
+              )}
             </div>
           </div>
         )}
@@ -256,7 +353,10 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
         {/* Format and Quality Section */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <label htmlFor="quality" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label
+              htmlFor="quality"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
               Quality
             </label>
             <select
@@ -283,7 +383,10 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="format" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label
+              htmlFor="format"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
               Format
             </label>
             <select
@@ -312,8 +415,8 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
 
         {/* Toggle Advanced Options */}
         <div className="pt-2">
-          <button 
-            type="button" 
+          <button
+            type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
             disabled={isLoading || disabled}
             className="text-sm text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 disabled:opacity-70 disabled:cursor-not-allowed"
@@ -328,7 +431,10 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
             {/* Time Range */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label htmlFor="start-time" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <label
+                  htmlFor="start-time"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
                   Start Time (HH:MM:SS)
                 </label>
                 <input
@@ -341,12 +447,17 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-70"
                 />
                 {startTime && !validateTimeFormat(startTime) && (
-                  <p className="text-xs text-red-600 dark:text-red-400">Format must be HH:MM:SS</p>
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    Format must be HH:MM:SS
+                  </p>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="end-time" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <label
+                  htmlFor="end-time"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
                   End Time (HH:MM:SS)
                 </label>
                 <input
@@ -359,7 +470,9 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-70"
                 />
                 {endTime && !validateTimeFormat(endTime) && (
-                  <p className="text-xs text-red-600 dark:text-red-400">Format must be HH:MM:SS</p>
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    Format must be HH:MM:SS
+                  </p>
                 )}
               </div>
             </div>
@@ -374,7 +487,9 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   disabled={isLoading || disabled}
                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600"
                 />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Download entire playlist</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  Download entire playlist
+                </span>
               </label>
 
               <label className="inline-flex items-center space-x-2">
@@ -385,13 +500,18 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   disabled={isLoading || disabled}
                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600"
                 />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Download subtitles</span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  Download subtitles
+                </span>
               </label>
             </div>
 
             {/* Output Directory */}
             <div className="space-y-2">
-              <label htmlFor="output-dir" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label
+                htmlFor="output-dir"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
                 Output Directory
               </label>
               <div className="flex space-x-2">
@@ -427,9 +547,10 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
           <button
             type="submit"
             disabled={
-              isLoading || 
-              disabled || 
+              isLoading ||
+              disabled ||
               !url ||
+              !isUrlValid ||
               (startTime ? !validateTimeFormat(startTime) : false) ||
               (endTime ? !validateTimeFormat(endTime) : false)
             }
@@ -438,13 +559,15 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
             {isLoading ? 'Processing...' : disabled ? 'Download in Progress...' : 'Download'}
           </button>
         </div>
-        
+
         {/* Pro version promo for free users */}
         {!isPro && (
           <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700 text-center">
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              <span className="text-amber-600 dark:text-amber-400 font-medium">Upgrade to Pro</span> for 4K quality, 
-              high-fidelity audio, unlimited downloads, and more
+              <span className="text-amber-600 dark:text-amber-400 font-medium">
+                Upgrade to Pro
+              </span>{' '}
+              for 4K quality, high-fidelity audio, unlimited downloads, and more
             </p>
           </div>
         )}
