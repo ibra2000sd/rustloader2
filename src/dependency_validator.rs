@@ -1,17 +1,17 @@
 //! Enhanced dependency validator for Rustloader
-//! 
+//!
 //! This module provides functionality to validate and verify external dependencies
 //! like yt-dlp and ffmpeg, checking versions, binary integrity, and known vulnerabilities.
 
 use crate::error::AppError;
-use std::process::{Command, Stdio};
-use std::collections::HashMap;
-use ring::digest;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use colored::*;
-use std::io::Read;
+use ring::digest;
+use std::collections::HashMap;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 // Minimum acceptable versions for dependencies
 pub const MIN_YTDLP_VERSION: &str = "2023.07.06";
@@ -66,13 +66,13 @@ fn get_dependency_path(name: &str) -> Result<String, AppError> {
     // List of common paths where `ffmpeg` might be installed across different OS
     if name == "ffmpeg" {
         let common_paths = vec![
-            "/usr/bin/ffmpeg",                // Standard Linux path
-            "/usr/local/bin/ffmpeg",          // Common Linux/macOS installation path
-            "/opt/homebrew/bin/ffmpeg",       // Homebrew installation on macOS (Apple Silicon)
-            "/snap/bin/ffmpeg",               // Snap package location
+            "/usr/bin/ffmpeg",                            // Standard Linux path
+            "/usr/local/bin/ffmpeg",                      // Common Linux/macOS installation path
+            "/opt/homebrew/bin/ffmpeg", // Homebrew installation on macOS (Apple Silicon)
+            "/snap/bin/ffmpeg",         // Snap package location
             "/var/lib/flatpak/app/org.ffmpeg/ffmpeg", // Flatpak installation
             "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe", // Common Windows installation path
-            "C:\\ffmpeg\\bin\\ffmpeg.exe"     // Alternative Windows installation path
+            "C:\\ffmpeg\\bin\\ffmpeg.exe", // Alternative Windows installation path
         ];
 
         // Check if `ffmpeg` exists in any of the predefined paths
@@ -86,24 +86,27 @@ fn get_dependency_path(name: &str) -> Result<String, AppError> {
 
     // At this point, we couldn't find the dependency, but we'll return a placeholder
     // to allow the program to continue trying
-    println!("{}", format!("Warning: {} not found in PATH or common locations. Will try to proceed anyway.", name).yellow());
-    
+    println!(
+        "{}",
+        format!(
+            "Warning: {} not found in PATH or common locations. Will try to proceed anyway.",
+            name
+        )
+        .yellow()
+    );
+
     // Return a placeholder path that indicates we're continuing without verification
     Ok(format!("__continuing_without_{}", name))
 }
 
-
-
-
 /// Calculate SHA-256 hash of a file
 fn calculate_file_hash(path: &str) -> Result<String, AppError> {
-    let mut file = File::open(path)
-        .map_err(|e| AppError::IoError(e))?;
-        
+    let mut file = File::open(path).map_err(|e| AppError::IoError(e))?;
+
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)
         .map_err(|e| AppError::IoError(e))?;
-        
+
     let digest = digest::digest(&digest::SHA256, &buffer);
     Ok(general_purpose::STANDARD.encode(digest.as_ref()))
 }
@@ -115,57 +118,77 @@ fn parse_version(output: &str, name: &str) -> String {
         "yt-dlp" => vec![
             r"(?i)yt-dlp\s+(\d+\.\d+\.\d+)",
             r"(?i)version\s+(\d+\.\d+\.\d+)",
-            r"(?i)(\d+\.\d+\.\d+)"
+            r"(?i)(\d+\.\d+\.\d+)",
         ],
         "ffmpeg" => vec![
             r"(?i)ffmpeg\s+version\s+(\d+\.\d+(?:\.\d+)?)",
             r"(?i)version\s+(\d+\.\d+(?:\.\d+)?)",
             r"(?i)ffmpeg\s+(\d+\.\d+(?:\.\d+)?)",
             r"(?i)ffmpeg.*?(\d+\.\d+(?:\.\d+)?)", // More permissive pattern
-            r"(?i)(\d+\.\d+(?:\.\d+)?)"  // Last resort - any version-like string
+            r"(?i)(\d+\.\d+(?:\.\d+)?)",          // Last resort - any version-like string
         ],
         _ => vec![r"(\d+\.\d+\.\d+)"],
     };
-    
+
     // Try each pattern in order
     for pattern in version_patterns {
         let re = match regex::Regex::new(pattern) {
             Ok(re) => re,
             Err(_) => continue,
         };
-        
+
         if let Some(captures) = re.captures(output) {
             if let Some(version) = captures.get(1) {
                 return version.as_str().to_string();
             }
         }
     }
-    
+
     // If no pattern matched, look for any version-like string
     let generic_pattern = r"(\d+\.\d+(?:\.\d+)?)";
     if let Ok(re) = regex::Regex::new(generic_pattern) {
         if let Some(captures) = re.captures(output) {
             if let Some(version) = captures.get(1) {
-                println!("{}", format!("Found potential {} version using fallback method: {}", 
-                                      name, version.as_str()).yellow());
+                println!(
+                    "{}",
+                    format!(
+                        "Found potential {} version using fallback method: {}",
+                        name,
+                        version.as_str()
+                    )
+                    .yellow()
+                );
                 return version.as_str().to_string();
             }
         }
     }
-    
+
     // Debug output to help diagnose issues
-    println!("{}", format!("Could not parse version from output for {}: {}", name, output).yellow());
-    println!("{}", "Returning 'unknown' as version - will attempt to continue".yellow());
-    
+    println!(
+        "{}",
+        format!(
+            "Could not parse version from output for {}: {}",
+            name, output
+        )
+        .yellow()
+    );
+    println!(
+        "{}",
+        "Returning 'unknown' as version - will attempt to continue".yellow()
+    );
+
     // Fallback - return first line, or "unknown"
-    output.lines().next().map_or_else(|| "unknown".to_string(), |line| {
-        if line.len() > 30 {
-            // Truncate long lines
-            format!("{}...", &line[0..30])
-        } else {
-            line.to_string()
-        }
-    })
+    output.lines().next().map_or_else(
+        || "unknown".to_string(),
+        |line| {
+            if line.len() > 30 {
+                // Truncate long lines
+                format!("{}...", &line[0..30])
+            } else {
+                line.to_string()
+            }
+        },
+    )
 }
 
 /// Check if a version is at least the minimum required
@@ -176,26 +199,26 @@ fn is_minimum_version(version: &str, min_version: &str) -> bool {
         .split('.')
         .filter_map(|s| s.parse::<u32>().ok())
         .collect();
-        
+
     let min_parts: Vec<u32> = min_version
         .split('.')
         .filter_map(|s| s.parse::<u32>().ok())
         .collect();
-        
+
     // Compare major, minor, patch parts
     for i in 0..3 {
         let v1 = version_parts.get(i).copied().unwrap_or(0);
         let v2 = min_parts.get(i).copied().unwrap_or(0);
-        
+
         if v1 > v2 {
             return true;
         }
-        
+
         if v1 < v2 {
             return false;
         }
     }
-    
+
     // Versions are equal
     true
 }
@@ -209,26 +232,37 @@ fn is_vulnerable_version(version: &str, vulnerable_versions: &[&str]) -> bool {
 pub fn get_dependency_info(name: &str) -> Result<DependencyInfo, AppError> {
     // First check if dependency exists
     let path = get_dependency_path(name)?;
-    
+
     // If we're continuing without the dependency, create a placeholder
     if path.starts_with("__continuing_without_") {
-        println!("{}", format!("Will attempt operations without verified {} installation", name).yellow());
-        
+        println!(
+            "{}",
+            format!(
+                "Will attempt operations without verified {} installation",
+                name
+            )
+            .yellow()
+        );
+
         return Ok(DependencyInfo {
             name: name.to_string(),
             version: "unknown".to_string(),
             path: path,
             hash: None,
-            is_min_version: false,  // Assume it doesn't meet min version
-            is_vulnerable: false,   // Assume it's not vulnerable (since we don't know)
+            is_min_version: false, // Assume it doesn't meet min version
+            is_vulnerable: false,  // Assume it's not vulnerable (since we don't know)
         });
     }
-    
+
     // Normal path - get version info
     let output = match Command::new(&path).arg("--version").output() {
         Ok(output) => output,
         Err(e) => {
-            println!("{}: {}", format!("Warning: Failed to get {} version", name).yellow(), e);
+            println!(
+                "{}: {}",
+                format!("Warning: Failed to get {} version", name).yellow(),
+                e
+            );
             // Return a placeholder info but don't fail completely
             return Ok(DependencyInfo {
                 name: name.to_string(),
@@ -240,9 +274,12 @@ pub fn get_dependency_info(name: &str) -> Result<DependencyInfo, AppError> {
             });
         }
     };
-    
+
     if !output.status.success() {
-        println!("{}", format!("Warning: {} version check failed, but continuing", name).yellow());
+        println!(
+            "{}",
+            format!("Warning: {} version check failed, but continuing", name).yellow()
+        );
         return Ok(DependencyInfo {
             name: name.to_string(),
             version: "unknown".to_string(),
@@ -252,40 +289,40 @@ pub fn get_dependency_info(name: &str) -> Result<DependencyInfo, AppError> {
             is_vulnerable: false,
         });
     }
-    
+
     let version_output = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr_output = String::from_utf8_lossy(&output.stderr).to_string();
-    
+
     // Combine stdout and stderr as some programs output version to stderr
     let combined_output = format!("{}\n{}", version_output, stderr_output);
-    
+
     // Parse version from output
     let version = parse_version(&combined_output, name);
-    
+
     // Calculate file hash - but don't fail if we can't
     let hash = match calculate_file_hash(&path) {
         Ok(h) => Some(h),
         Err(_) => None,
     };
-    
+
     // Check minimum version
     let min_version = match name {
         "yt-dlp" => MIN_YTDLP_VERSION,
         "ffmpeg" => MIN_FFMPEG_VERSION,
         _ => "0.0.0",
     };
-    
+
     let is_min_version = is_minimum_version(&version, min_version);
-    
+
     // Check if vulnerable version
     let vulnerable_versions = match name {
         "yt-dlp" => &VULNERABLE_YTDLP_VERSIONS[..],
         "ffmpeg" => &VULNERABLE_FFMPEG_VERSIONS[..],
         _ => &[][..],
     };
-    
+
     let is_vulnerable = is_vulnerable_version(&version, vulnerable_versions);
-    
+
     Ok(DependencyInfo {
         name: name.to_string(),
         version,
@@ -296,19 +333,19 @@ pub fn get_dependency_info(name: &str) -> Result<DependencyInfo, AppError> {
     })
 }
 
-
 /// A direct check for FFmpeg availability that falls back on multiple methods
 /// Returns true if FFmpeg appears to be available, false otherwise
 pub fn is_ffmpeg_available() -> bool {
     // Method 1: Direct command execution
     if let Ok(output) = std::process::Command::new("ffmpeg")
         .arg("-version")
-        .output() {
+        .output()
+    {
         if output.status.success() {
             return true;
         }
     }
-    
+
     // Method 2: Check common paths
     let common_paths = vec![
         "/usr/bin/ffmpeg",
@@ -316,32 +353,28 @@ pub fn is_ffmpeg_available() -> bool {
         "/opt/homebrew/bin/ffmpeg",
         "/snap/bin/ffmpeg",
         "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
-        "C:\\ffmpeg\\bin\\ffmpeg.exe"
+        "C:\\ffmpeg\\bin\\ffmpeg.exe",
     ];
-    
+
     for path in common_paths {
         if std::path::Path::new(path).exists() {
             // Try to execute it directly
-            if let Ok(output) = std::process::Command::new(path)
-                .arg("-version")
-                .output() {
+            if let Ok(output) = std::process::Command::new(path).arg("-version").output() {
                 if output.status.success() {
                     return true;
                 }
             }
         }
     }
-    
+
     // Method 3: Use which/where
     #[cfg(target_os = "windows")]
     let which_cmd = "where";
-    
+
     #[cfg(not(target_os = "windows"))]
     let which_cmd = "which";
-    
-    if let Ok(output) = std::process::Command::new(which_cmd)
-        .arg("ffmpeg")
-        .output() {
+
+    if let Ok(output) = std::process::Command::new(which_cmd).arg("ffmpeg").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() && std::path::Path::new(&path).exists() {
@@ -349,7 +382,7 @@ pub fn is_ffmpeg_available() -> bool {
             }
         }
     }
-    
+
     // If all methods failed, FFmpeg probably isn't available
     false
 }
@@ -358,110 +391,144 @@ pub fn is_ffmpeg_available() -> bool {
 pub fn validate_dependencies() -> Result<HashMap<String, DependencyInfo>, AppError> {
     let mut results = HashMap::new();
     let mut has_issues = false;
-    
+
     println!("{}", "Validating dependencies...".blue());
-    
+
     // Check yt-dlp
     match get_dependency_info("yt-dlp") {
         Ok(info) => {
             println!("{}: {} ({})", "yt-dlp".green(), info.version, info.path);
-            
+
             if !info.is_min_version {
-                println!("{}: Version {} is below minimum required ({})", 
-                    "WARNING".yellow(), 
-                    info.version, 
-                    MIN_YTDLP_VERSION);
+                println!(
+                    "{}: Version {} is below minimum required ({})",
+                    "WARNING".yellow(),
+                    info.version,
+                    MIN_YTDLP_VERSION
+                );
                 has_issues = true;
             }
-            
+
             if info.is_vulnerable {
-                println!("{}: Version {} has known vulnerabilities", 
-                    "WARNING".red(), 
-                    info.version);
+                println!(
+                    "{}: Version {} has known vulnerabilities",
+                    "WARNING".red(),
+                    info.version
+                );
                 has_issues = true;
             }
-            
+
             results.insert("yt-dlp".to_string(), info);
-        },
+        }
         Err(e) => {
             println!("{}: {}", "ERROR".red(), e);
             has_issues = true;
         }
     }
-    
-    // Check ffmpeg
-    match get_dependency_info("ffmpeg") {
-        Ok(info) => {
-            println!("{}: {} ({})", "ffmpeg".green(), info.version, info.path);
-            
-            if !info.is_min_version {
-                println!("{}: Version {} is below minimum required ({})", 
-                    "WARNING".yellow(), 
-                    info.version, 
-                    MIN_FFMPEG_VERSION);
-                has_issues = true;
+
+    // Check ffmpeg with improved detection
+    let ffmpeg_available = is_ffmpeg_available();
+
+    if ffmpeg_available {
+        match get_dependency_info("ffmpeg") {
+            Ok(info) => {
+                println!("{}: {} ({})", "ffmpeg".green(), info.version, info.path);
+
+                // Make version check more lenient
+                if !info.is_min_version {
+                    println!("{}: Version {} is below minimum recommended ({}), but will attempt to continue", 
+                        "WARNING".yellow(), 
+                        info.version, 
+                        MIN_FFMPEG_VERSION);
+                }
+
+                if info.is_vulnerable {
+                    println!(
+                        "{}: Version {} has known vulnerabilities",
+                        "WARNING".yellow(),
+                        info.version
+                    );
+                }
+
+                // Allow operation to continue even with older ffmpeg
+                results.insert("ffmpeg".to_string(), info);
             }
-            
-            if info.is_vulnerable {
-                println!("{}: Version {} has known vulnerabilities", 
-                    "WARNING".red(), 
-                    info.version);
-                has_issues = true;
+            Err(e) => {
+                println!("{}: {}", "WARNING".yellow(), e);
+                println!(
+                    "{}",
+                    "Will attempt to continue with limited functionality.".yellow()
+                );
             }
-            
-            results.insert("ffmpeg".to_string(), info);
-        },
-        Err(e) => {
-            println!("{}: {}", "ERROR".red(), e);
-            has_issues = true;
         }
+    } else {
+        println!(
+            "{}",
+            "ffmpeg not found, but will attempt to continue with limited functionality.".yellow()
+        );
+        println!(
+            "{}",
+            "Audio conversion and time-based extraction may not work.".yellow()
+        );
     }
-    
+
     // Display summary
     if has_issues {
-        println!("{}", "\nDependency validation completed with warnings.".yellow());
+        println!(
+            "{}",
+            "\nDependency validation completed with warnings.".yellow()
+        );
     } else {
         println!("{}", "\nAll dependencies validated successfully.".green());
     }
-    
+
+    // Return success even with warnings to allow the application to try to run
     Ok(results)
 }
 
 /// Update yt-dlp to the latest version
 pub fn update_ytdlp() -> Result<(), AppError> {
     println!("{}", "Updating yt-dlp to latest version...".blue());
-    
+
     let output = Command::new("yt-dlp")
         .arg("--update")
         .stdout(Stdio::inherit()) // Show output to user
         .stderr(Stdio::inherit())
         .status()
         .map_err(|e| AppError::IoError(e))?;
-        
+
     if output.success() {
         // Verify the update was successful
         match get_dependency_info("yt-dlp") {
             Ok(info) => {
                 println!("{}: {}", "Updated yt-dlp version", info.version);
-                
+
                 if !info.is_min_version {
-                    println!("{}: Version is still below minimum required ({})", 
-                        "WARNING".yellow(), 
-                        MIN_YTDLP_VERSION);
-                    return Err(AppError::General("Failed to update yt-dlp to required version".to_string()));
+                    println!(
+                        "{}: Version is still below minimum required ({})",
+                        "WARNING".yellow(),
+                        MIN_YTDLP_VERSION
+                    );
+                    return Err(AppError::General(
+                        "Failed to update yt-dlp to required version".to_string(),
+                    ));
                 }
-                
+
                 if info.is_vulnerable {
-                    println!("{}: Updated version still has known vulnerabilities", 
-                        "WARNING".red());
-                    return Err(AppError::General("Updated to a vulnerable version of yt-dlp".to_string()));
+                    println!(
+                        "{}: Updated version still has known vulnerabilities",
+                        "WARNING".red()
+                    );
+                    return Err(AppError::General(
+                        "Updated to a vulnerable version of yt-dlp".to_string(),
+                    ));
                 }
-            },
+            }
             Err(e) => {
                 return Err(e);
             }
         }
-        
+
         println!("{}", "yt-dlp updated successfully.".green());
         Ok(())
     } else {
@@ -474,14 +541,14 @@ pub fn update_ytdlp() -> Result<(), AppError> {
 #[allow(dead_code)]
 pub fn verify_dependency_integrity(name: &str) -> Result<bool, AppError> {
     println!("{} {}", "Verifying integrity of", name);
-    
+
     // Get current dependency info
     let info = get_dependency_info(name)?;
-    
+
     // This is where we would verify against known good hashes
     // In a real implementation, these would be fetched from a secure server
     // or embedded in the binary
-    
+
     // For now, just print the hash for reference
     if let Some(hash) = &info.hash {
         println!("{} SHA-256: {}", name, hash);
@@ -489,7 +556,10 @@ pub fn verify_dependency_integrity(name: &str) -> Result<bool, AppError> {
         // In a real implementation, verify against trusted hash
         return Ok(true);
     } else {
-        println!("{}", "Could not calculate hash for integrity verification.".yellow());
+        println!(
+            "{}",
+            "Could not calculate hash for integrity verification.".yellow()
+        );
         return Ok(false);
     }
 }
@@ -498,39 +568,49 @@ pub fn verify_dependency_integrity(name: &str) -> Result<bool, AppError> {
 #[allow(dead_code)]
 pub fn check_rust_updates() -> Result<(), AppError> {
     println!("{}", "Checking for Rust updates...".blue());
-    
+
     if !cfg!(debug_assertions) {
         // Skip in release mode for end users
         println!("{}", "Skipping Rust update check in release mode.".blue());
         return Ok(());
     }
-    
-    if !Command::new("rustup").arg("--version").status().map_err(|e| AppError::IoError(e))?.success() {
-        println!("{}", "rustup not found. Skipping Rust update check.".yellow());
+
+    if !Command::new("rustup")
+        .arg("--version")
+        .status()
+        .map_err(|e| AppError::IoError(e))?
+        .success()
+    {
+        println!(
+            "{}",
+            "rustup not found. Skipping Rust update check.".yellow()
+        );
         return Ok(());
     }
-    
+
     let output = Command::new("rustup")
         .arg("update")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .map_err(|e| AppError::IoError(e))?;
-        
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-        
+
     if !output.status.success() {
         println!("{}: {}", "Error checking for Rust updates".red(), stderr);
-        return Err(AppError::General("Failed to check for Rust updates".to_string()));
+        return Err(AppError::General(
+            "Failed to check for Rust updates".to_string(),
+        ));
     }
-    
+
     if stdout.contains("Updated") {
         println!("{}", "Rust toolchain updated successfully.".green());
     } else {
         println!("{}", "Rust toolchain is up to date.".green());
     }
-    
+
     Ok(())
 }
 
@@ -545,41 +625,45 @@ pub fn install_or_update_dependency(name: &str) -> Result<(), AppError> {
                     } else {
                         println!("{} is up to date ({})", name, info.version);
                     }
-                },
+                }
                 Err(_) => {
                     // Not installed, install it
                     install_ytdlp()?;
                 }
             }
-        },
+        }
         "ffmpeg" => {
             match get_dependency_info("ffmpeg") {
                 Ok(info) => {
                     if !info.is_min_version || info.is_vulnerable {
-                        println!("{}: {} needs updating but must be done manually", name.yellow(), info.version);
+                        println!(
+                            "{}: {} needs updating but must be done manually",
+                            name.yellow(),
+                            info.version
+                        );
                         println!("Please update ffmpeg using your system package manager.");
                     } else {
                         println!("{} is up to date ({})", name, info.version);
                     }
-                },
+                }
                 Err(_) => {
                     // Not installed, install it manually
                     install_ffmpeg()?;
                 }
             }
-        },
+        }
         _ => {
             return Err(AppError::General(format!("Unknown dependency: {}", name)));
         }
     }
-    
+
     Ok(())
 }
 
 /// Install yt-dlp
 fn install_ytdlp() -> Result<(), AppError> {
     println!("{}", "Installing yt-dlp...".blue());
-    
+
     let cmd = if cfg!(target_os = "windows") {
         let status = Command::new("pip")
             .arg("install")
@@ -588,7 +672,7 @@ fn install_ytdlp() -> Result<(), AppError> {
             .arg("yt-dlp")
             .status()
             .map_err(|e| AppError::IoError(e))?;
-            
+
         status.success()
     } else {
         let status = Command::new("pip3")
@@ -598,35 +682,39 @@ fn install_ytdlp() -> Result<(), AppError> {
             .arg("yt-dlp")
             .status()
             .map_err(|e| AppError::IoError(e))?;
-            
+
         status.success()
     };
-    
+
     if cmd {
         println!("{}", "yt-dlp installed successfully.".green());
-        
+
         // Verify installation
         match get_dependency_info("yt-dlp") {
             Ok(info) => {
                 println!("Installed version: {}", info.version);
-                
+
                 if !info.is_min_version {
-                    println!("{}: Version is below minimum required ({})", 
-                        "WARNING".yellow(), 
-                        MIN_YTDLP_VERSION);
+                    println!(
+                        "{}: Version is below minimum required ({})",
+                        "WARNING".yellow(),
+                        MIN_YTDLP_VERSION
+                    );
                 }
-                
+
                 if info.is_vulnerable {
-                    println!("{}: Installed version has known vulnerabilities", 
-                        "WARNING".red());
+                    println!(
+                        "{}: Installed version has known vulnerabilities",
+                        "WARNING".red()
+                    );
                 }
-            },
+            }
             Err(e) => {
                 println!("{}: {}", "Failed to verify installation".red(), e);
                 return Err(e);
             }
         }
-        
+
         Ok(())
     } else {
         println!("{}", "Failed to install yt-dlp.".red());
@@ -656,17 +744,23 @@ fn install_ffmpeg() -> Result<(), AppError> {
             ("yum", &["install", "-y", "ffmpeg"]),
             ("pacman", &["-S", "--noconfirm", "ffmpeg"]),
         ];
-        
+
         let mut installed = false;
-        
+
         for (pm, args) in package_managers.iter() {
-            if Command::new("which").arg(pm).stdout(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+            if Command::new("which")
+                .arg(pm)
+                .stdout(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            {
                 println!("Using {} to install ffmpeg...", pm);
-                
+
                 // Fix: Create the sudo_args vector and store it in a variable
                 let sudo_command = "sudo".to_string();
                 let pm_string = (*pm).to_string();
-                
+
                 // Fix: Build the command directly without constructing the vector
                 installed = Command::new(&sudo_command)
                     .arg(&pm_string)
@@ -674,17 +768,23 @@ fn install_ffmpeg() -> Result<(), AppError> {
                     .status()
                     .map_err(|e| AppError::IoError(e))?
                     .success();
-                    
+
                 if installed {
                     break;
                 }
             }
         }
-        
+
         installed
     } else if cfg!(target_os = "windows") {
         // Windows - try using chocolatey
-        if Command::new("where").arg("choco").stdout(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+        if Command::new("where")
+            .arg("choco")
+            .stdout(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
             Command::new("choco")
                 .arg("install")
                 .arg("ffmpeg")
@@ -693,41 +793,51 @@ fn install_ffmpeg() -> Result<(), AppError> {
                 .map_err(|e| AppError::IoError(e))?
                 .success()
         } else {
-            println!("{}", "Chocolatey not found. Please install ffmpeg manually:".yellow());
+            println!(
+                "{}",
+                "Chocolatey not found. Please install ffmpeg manually:".yellow()
+            );
             println!("https://ffmpeg.org/download.html");
             false
         }
     } else {
-        println!("{}", "Unsupported platform for automatic ffmpeg installation.".yellow());
+        println!(
+            "{}",
+            "Unsupported platform for automatic ffmpeg installation.".yellow()
+        );
         println!("Please install ffmpeg manually: https://ffmpeg.org/download.html");
         false
     };
-    
+
     if success {
         println!("{}", "ffmpeg installed successfully.".green());
-        
+
         // Verify installation
         match get_dependency_info("ffmpeg") {
             Ok(info) => {
                 println!("Installed version: {}", info.version);
-                
+
                 if !info.is_min_version {
-                    println!("{}: Version is below minimum required ({})", 
-                        "WARNING".yellow(), 
-                        MIN_FFMPEG_VERSION);
+                    println!(
+                        "{}: Version is below minimum required ({})",
+                        "WARNING".yellow(),
+                        MIN_FFMPEG_VERSION
+                    );
                 }
-                
+
                 if info.is_vulnerable {
-                    println!("{}: Installed version has known vulnerabilities", 
-                        "WARNING".red());
+                    println!(
+                        "{}: Installed version has known vulnerabilities",
+                        "WARNING".red()
+                    );
                 }
-            },
+            }
             Err(e) => {
                 println!("{}: {}", "Failed to verify installation".red(), e);
                 return Err(e);
             }
         }
-        
+
         Ok(())
     } else {
         println!("{}", "Failed to install ffmpeg automatically.".red());

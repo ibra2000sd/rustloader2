@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -10,7 +9,6 @@ import Footer from './components/Footer';
 import Tabs from './components/Tabs';
 import Alert from './components/Alert';
 
-// Type definitions
 export type TabType = 'download' | 'license';
 export type LicenseStatus = 'checking' | 'free' | 'pro';
 
@@ -26,7 +24,6 @@ export interface DownloadParams {
 }
 
 const App: React.FC = () => {
-  // Application state
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>('checking');
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -40,7 +37,6 @@ const App: React.FC = () => {
     timeRemaining?: number;
   }>({});
 
-  // Check license status on mount
   useEffect(() => {
     const checkLicense = async () => {
       try {
@@ -52,11 +48,9 @@ const App: React.FC = () => {
         setError('License check failed. Using free version.');
       }
     };
-
     checkLicense();
   }, []);
 
-  // Check for pending downloads
   useEffect(() => {
     const checkPendingDownloads = async () => {
       try {
@@ -69,15 +63,16 @@ const App: React.FC = () => {
         console.error('Failed to check pending downloads:', err);
       }
     };
-
     checkPendingDownloads();
   }, []);
 
-  // Listen for download progress events
   useEffect(() => {
-    const setupListener = async () => {
+    let unlistenProgress: Promise<() => void>;
+    let unlistenCompletion: Promise<() => void>;
+
+    const setupListeners = async () => {
       try {
-        const unlisten = await listen<{
+        unlistenProgress = listen<{
           progress: number;
           fileName?: string;
           fileSize?: number;
@@ -87,40 +82,43 @@ const App: React.FC = () => {
           const { progress, ...info } = event.payload;
           setDownloadProgress(progress);
           setDownloadInfo(info);
-
-          // When download completes
-          if (progress >= 100) {
-            setTimeout(() => {
-              setIsDownloading(false);
-              setSuccess('Download completed successfully!');
-            }, 2000);
-          }
         });
 
-        return unlisten;
+        unlistenCompletion = listen<{
+          success: boolean;
+          message: string;
+        }>('download-completed', (event) => {
+          const { success, message } = event.payload;
+          setTimeout(() => {
+            setIsDownloading(false);
+            if (success) {
+              setSuccess(message || 'Download completed successfully!');
+            } else {
+              setError(`Download failed: ${message}`);
+            }
+          }, 1000);
+        });
       } catch (err) {
-        console.error('Failed to set up event listener:', err);
-        return () => {};
+        console.error('Failed to set up event listeners:', err);
       }
     };
 
-    const unsubscribe = setupListener();
+    setupListeners();
+
     return () => {
-      unsubscribe.then(unlisten => {
-        unlisten();
-      }).catch(err => console.error('Failed to unsubscribe:', err));
+      unlistenProgress?.then(unlisten => unlisten()).catch(err => console.error('Failed to unsubscribe from progress event:', err));
+      unlistenCompletion?.then(unlisten => unlisten()).catch(err => console.error('Failed to unsubscribe from completion event:', err));
     };
   }, []);
 
-  // Handle download start
   const handleDownloadStart = async (params: DownloadParams) => {
     setError('');
     setSuccess('');
+    setDownloadProgress(0);
+    setDownloadInfo({});
+    setIsDownloading(true);
 
     try {
-      setIsDownloading(true);
-      setDownloadProgress(0);
-
       await invoke('start_download', {
         url: params.url,
         quality: params.quality || undefined,
@@ -129,9 +127,10 @@ const App: React.FC = () => {
         endTime: params.endTime || undefined,
         usePlaylist: params.usePlaylist,
         downloadSubtitles: params.downloadSubtitles,
-        outputDir: params.outputDir || undefined,
-        progressState: {} // This is handled by the backend
+        outputDir: params.outputDir || undefined
       });
+
+      invoke('poll_download_progress');
     } catch (err) {
       console.error('Download failed:', err);
       setIsDownloading(false);
@@ -139,7 +138,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Handle license activation
   const handleLicenseActivation = async (success: boolean) => {
     if (success) {
       setLicenseStatus('pro');
@@ -151,16 +149,13 @@ const App: React.FC = () => {
     <div className="h-screen w-screen overflow-hidden bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <div className="flex flex-col h-full w-full max-w-app mx-auto">
         <Header licenseStatus={licenseStatus} />
-        
+
         <main className="flex-1 overflow-auto p-4">
-          {/* Alerts */}
           {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
           {success && <Alert type="success" message={success} onDismiss={() => setSuccess('')} />}
           
-          {/* Tabs */}
           <Tabs activeTab={activeTab} onChange={setActiveTab} />
-          
-          {/* Progress Bar (shown during download) */}
+
           {isDownloading && (
             <div className="mb-4">
               <ProgressBar 
@@ -172,8 +167,7 @@ const App: React.FC = () => {
               />
             </div>
           )}
-          
-          {/* Tab Content */}
+
           <div className="mt-4">
             {activeTab === 'download' ? (
               <DownloadForm 
@@ -189,7 +183,7 @@ const App: React.FC = () => {
             )}
           </div>
         </main>
-        
+
         <Footer />
       </div>
     </div>

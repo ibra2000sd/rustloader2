@@ -82,7 +82,7 @@ pub fn build_cli() -> Command {
                 .help("Display current license information")
                 .action(ArgAction::SetTrue),
         );
-    
+
     // Only include the force flag in debug builds
     #[cfg(debug_assertions)]
     {
@@ -93,6 +93,6 @@ pub fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         );
     }
-    
+
     app
 }

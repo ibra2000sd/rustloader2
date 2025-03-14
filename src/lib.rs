@@ -5,19 +5,19 @@ mod version;
 pub use version::VERSION;
 
 pub mod cli;
-pub mod downloader;
 pub mod dependency_validator;
+pub mod downloader;
 pub mod error;
+pub mod license;
 pub mod security;
 pub mod utils;
-pub mod license;
 
-use crate::downloader::download_video_free;
 use crate::dependency_validator::validate_dependencies;
-use crate::license::{is_pro_version, activate_license, LicenseStatus}; // Removed display_license_info
-use tokio::runtime::Runtime;
+use crate::downloader::download_video_free;
+use crate::license::{activate_license, is_pro_version, LicenseStatus}; // Removed display_license_info
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::runtime::Runtime;
 
 /// Download a video using Rustloader core functionality
 /// This function is designed to be called from the Tauri GUI
@@ -33,11 +33,11 @@ pub fn download_video(
 ) -> Result<String, String> {
     // Set up a runtime for async operations
     let rt = Runtime::new().map_err(|e| e.to_string())?;
-    
+
     // Create a progress tracker for the UI to access
     let progress = Arc::new(Mutex::new(0));
     let progress_clone = Arc::clone(&progress);
-    
+
     // Run the download operation in the runtime
     let result = rt.block_on(async {
         // Optional: Check dependencies
@@ -47,12 +47,12 @@ pub fn download_video(
                 return Err(format!("Dependency check failed: {}", e));
             }
         }
-        
+
         // Convert Option<String> to Option<&String> for the function call
         let start_ref = start_time.as_ref();
         let end_ref = end_time.as_ref();
         let output_ref = output_dir.as_ref();
-        
+
         // Set up a thread to update the progress
         let progress_updater = tokio::spawn(async move {
             loop {
@@ -67,7 +67,7 @@ pub fn download_video(
                 }
             }
         });
-        
+
         // Call the download function
         let download_result = download_video_free(
             url,
@@ -80,19 +80,20 @@ pub fn download_video(
             output_ref.as_deref(),
             false, // force_download
             None,  // bitrate
-        ).await;
-        
+        )
+        .await;
+
         // Set progress to 100% when finished
         let mut p = progress.lock().unwrap();
         *p = 100;
-        
+
         // Abort the progress updater
         progress_updater.abort();
-        
+
         // Convert the AppError to String for error cases
         download_result.map_err(|e| format!("{}", e))
     });
-    
+
     // Convert the result
     match result {
         Ok(_) => Ok("Download completed successfully".to_string()),
