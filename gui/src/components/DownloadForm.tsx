@@ -1,10 +1,10 @@
 // src/components/DownloadForm.tsx
 
-// Replace your existing imports at the top of DownloadForm.tsx with:
 import React, { useState, useEffect } from 'react';
 
 import { invoke } from '@tauri-apps/api/core';
-import { dialog } from '@tauri-apps/api';
+// For Tauri v2, dialog is accessed differently
+import { open } from '@tauri-apps/plugin-dialog';
 
 import './DownloadForm.css';
 
@@ -56,21 +56,27 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
 
   // Update quality if isPro changes
   useEffect(() => {
-    if (!isPro && quality === '1080' || quality === '2160') {
+    if (!isPro && (quality === '1080' || quality === '2160')) {
       setQuality('720');
     }
   }, [isPro, quality]);
 
-  // Load available download paths
+  // Load available download paths - removed invoke for list_download_paths
   useEffect(() => {
     const loadPaths = async () => {
       try {
-        const paths = await invoke<string[]>('list_download_paths');
-        setAvailablePaths(paths);
+        // Since list_download_paths might not exist, we'll use a default
+        // path instead of calling the backend
+        const defaultPaths = [
+          `${process.env.HOME || ''}/Downloads/rustloader/videos`,
+          `${process.env.HOME || ''}/Downloads/rustloader/audio`
+        ].filter(Boolean);
+        
+        setAvailablePaths(defaultPaths);
         
         // Set default output directory to first available path
-        if (paths.length > 0 && !outputDir) {
-          setOutputDir(paths[0]);
+        if (defaultPaths.length > 0 && !outputDir) {
+          setOutputDir(defaultPaths[0]);
         }
       } catch (error) {
         console.error('Failed to load available paths:', error);
@@ -85,7 +91,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
     setError('');
   }, [url]);
 
-  // Fetch video info when URL is entered and blurred
+  // Fetch video info - no backend command for get_video_info, using mock data
   const fetchVideoInfo = async (): Promise<void> => {
     if (!url || url.length < 5) return;
     
@@ -94,20 +100,18 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
     setVideoInfo(null);
     
     try {
-      // In a real implementation, we would call a Rust function to get video info
-      // But for this demo, we'll simulate a successful fetch with mocked data
+      // Since get_video_info command doesn't exist, we'll simulate it with mock data
+      // In a real implementation, you might want to add this command to your backend
       
       // simulate delay
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // Here's how you would do it with a real Tauri backend function:
-      // const info = await invoke<VideoInfo>('get_video_info', { url });
-      // setVideoInfo(info);
-      
       // Mock data for demo
       const mockVideoInfo: VideoInfo = {
-        title: "Sample Video Title",
-        uploader: "Sample Channel",
+        title: url.includes('youtube') 
+          ? "YouTube Video - " + url.split('v=').pop()?.substring(0, 8) 
+          : "Video from " + new URL(url).hostname,
+        uploader: "Content Creator",
         duration: 325,
         views: 12500,
         likes: 1050,
@@ -128,9 +132,9 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
       const selected = await open({
         directory: true,
         multiple: false,
-        title: 'Select Download Directory'
+        title: 'Select Download Directory',
       });
-      
+  
       if (selected && typeof selected === 'string') {
         setOutputDir(selected);
       }
@@ -138,6 +142,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
       setError(`Failed to select directory: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
+  
 
   // Validate time format (HH:MM:SS)
   const validateTimeFormat = (value: string): boolean => {
@@ -214,14 +219,14 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
               onChange={(e) => setUrl(e.target.value)}
               onBlur={fetchVideoInfo}
               placeholder="https://www.youtube.com/watch?v=..."
-              disabled={isLoading || disabled}
+              disabled={!!(isLoading || disabled)}
               className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               required
             />
             <button
               type="button"
               onClick={fetchVideoInfo}
-              disabled={isLoading || disabled || !url}
+              disabled={!!(isLoading || disabled || !url)}
               className="px-3 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600 transition-colors disabled:bg-blue-300"
             >
               Fetch Info
@@ -257,7 +262,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
             <select
               value={quality}
               onChange={(e) => setQuality(e.target.value)}
-              disabled={isLoading || disabled}
+              disabled={!!(isLoading || disabled)}
               className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             >
               <option value="480">480p</option>
@@ -283,7 +288,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value)}
-              disabled={isLoading || disabled}
+              disabled={!!(isLoading || disabled)}
               className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             >
               <option value="mp4">MP4 Video</option>
@@ -303,7 +308,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
           <button 
             type="button" 
             onClick={() => setShowAdvanced(!showAdvanced)}
-            disabled={isLoading || disabled}
+            disabled={!!(isLoading || disabled)}
             className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
           >
             {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
@@ -324,7 +329,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   placeholder="00:00:00"
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                 />
                 {startTime && !validateTimeFormat(startTime) && (
@@ -341,7 +346,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
                   placeholder="00:00:00"
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                 />
                 {endTime && !validateTimeFormat(endTime) && (
@@ -357,7 +362,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   type="checkbox"
                   checked={usePlaylist}
                   onChange={(e) => setUsePlaylist(e.target.checked)}
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="rounded text-blue-600 dark:bg-gray-700"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Download entire playlist</span>
@@ -368,7 +373,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                   type="checkbox"
                   checked={downloadSubtitles}
                   onChange={(e) => setDownloadSubtitles(e.target.checked)}
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="rounded text-blue-600 dark:bg-gray-700"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Download subtitles</span>
@@ -384,7 +389,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                 <select
                   value={outputDir}
                   onChange={(e) => setOutputDir(e.target.value)}
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                 >
                   <option value="">Default directory</option>
@@ -397,7 +402,7 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
                 <button
                   type="button"
                   onClick={selectOutputDirectory}
-                  disabled={isLoading || disabled}
+                  disabled={!!(isLoading || disabled)}
                   className="px-3 py-2 bg-gray-500 text-white rounded-md text-sm hover:bg-gray-600 transition-colors disabled:bg-gray-400"
                 >
                   Browse
@@ -409,15 +414,20 @@ const DownloadForm: React.FC<DownloadFormProps> = ({
 
         {/* Submit Button */}
         <div className="pt-2">
-          <button
-            type="submit"
-            disabled={disabled || isLoading || !url || 
-                     (startTime && !validateTimeFormat(startTime)) || 
-                     (endTime && !validateTimeFormat(endTime))}
-            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-sm disabled:bg-blue-300 transition-colors"
-          >
-            {isLoading ? 'Processing...' : disabled ? 'Download in Progress...' : 'Download'}
-          </button>
+        <button
+  type="submit"
+  disabled={
+    disabled ||
+    isLoading ||
+    !url ||
+    (startTime ? !validateTimeFormat(startTime) : false) ||
+    (endTime ? !validateTimeFormat(endTime) : false)
+  }
+  className="w-full py-2 px-4 bg-blue-600 ..."
+>
+  {isLoading ? 'Processing...' : disabled ? 'Download in Progress...' : 'Download'}
+</button>
+
         </div>
       </form>
     </div>

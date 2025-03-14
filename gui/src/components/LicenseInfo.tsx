@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface LicenseActivationProps {
   isProVersion: boolean;
@@ -53,19 +54,21 @@ const LicenseActivation: React.FC<LicenseActivationProps> = ({ isProVersion, onA
     setIsActivating(true);
     
     try {
-      // Mock license activation - in a real app, this would call your backend API
-      // For demo purposes, we're simulating a successful activation
-      setTimeout(() => {
-        setSuccessMessage('License activated successfully!');
-        setLicenseKey('');
-        setEmail('');
-        
-        // Notify parent component
-        if (onActivationComplete) {
-          onActivationComplete(true);
-        }
-        setIsActivating(false);
-      }, 1500);
+      // Fixed: changed to the correct command name 'activate_license'
+      await invoke('activate_license', {
+        licenseKey,
+        email
+      });
+      
+      setSuccessMessage('License activated successfully!');
+      setLicenseKey('');
+      setEmail('');
+      
+      // Notify parent component
+      if (onActivationComplete) {
+        onActivationComplete(true);
+      }
+      setIsActivating(false);
     } catch (error) {
       setErrorMessage(`Activation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       

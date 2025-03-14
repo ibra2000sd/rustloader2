@@ -1,6 +1,5 @@
 // src/App.tsx
 
-// Replace your existing imports at the top of App.tsx with:
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import DownloadForm from './components/DownloadForm';
@@ -33,12 +32,13 @@ const App: React.FC = () => {
     successMessage: ''
   });
 
-  // Check license status on mount
+  // Check license status on mount - FIXED: changed check_license to is_pro
   useEffect(() => {
     const checkLicense = async () => {
       try {
-        const status = await invoke<string>('check_license');
-        setState(prev => ({ ...prev, licenseStatus: status as 'free' | 'pro' }));
+        // Fixed: using is_pro instead of check_license
+        const isPro = await invoke<boolean>('is_pro');
+        setState(prev => ({ ...prev, licenseStatus: isPro ? 'pro' : 'free' }));
       } catch (error) {
         console.error('Failed to check license:', error);
         setState(prev => ({ 
@@ -75,27 +75,29 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Check for pending downloads on mount (useful for page refreshes)
+  // Check for pending downloads on mount - we'll keep this but handle errors safely
   useEffect(() => {
     const checkPendingDownloads = async () => {
       try {
-        const isDownloading = await invoke<boolean>('check_pending_downloads');
-        if (isDownloading) {
+        // Try to call get_progress instead since that's what's registered
+        const progress = await invoke<number>('get_progress');
+        if (progress > 0) {
           setState(prev => ({ 
             ...prev, 
             isDownloading: true,
-            downloadProgress: 0
+            downloadProgress: progress
           }));
         }
       } catch (error) {
         console.error('Failed to check pending downloads:', error);
+        // Continue without setting error state to avoid confusing the user
       }
     };
 
     checkPendingDownloads();
   }, []);
 
-  // Handle download form submission
+  // Handle download form submission - FIXED: changed download_video to start_download
   const handleDownloadStart = async (downloadParams: {
     url: string;
     quality: string;
@@ -116,7 +118,8 @@ const App: React.FC = () => {
     try {
       setState(prev => ({ ...prev, isDownloading: true, downloadProgress: 0 }));
       
-      await invoke('download_video', {
+      // Fixed: using start_download instead of download_video
+      await invoke('start_download', {
         url: downloadParams.url,
         quality: downloadParams.quality || undefined,
         format: downloadParams.format,
@@ -139,7 +142,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Handle license activation
+  // Handle license activation - FIXED: changed activate_license_key to activate_license
   const handleLicenseActivation = async (licenseKey: string, email: string) => {
     // Clear previous messages
     setState(prev => ({ 
@@ -149,7 +152,8 @@ const App: React.FC = () => {
     }));
 
     try {
-      const result = await invoke<string>('activate_license_key', {
+      // Fixed: using activate_license instead of activate_license_key
+      const result = await invoke<string>('activate_license', {
         licenseKey,
         email
       });
