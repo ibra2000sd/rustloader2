@@ -1,11 +1,12 @@
+// vite.config.ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   // Tauri expects a fixed port, and suggests using 1420
-  // Feel free to change this if needed
   server: {
     port: 1420,
     strictPort: true,
@@ -18,4 +19,10 @@ export default defineConfig({
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
   },
+  // Add path aliasing for improved imports
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, './src')
+    },
+  }
 });
