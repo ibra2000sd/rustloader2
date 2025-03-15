@@ -54,20 +54,48 @@ jobs:
             echo "jq is already installed"
           fi
       
-      - name: Collect Rust files
+      - name: Collect Rust files with issues
         run: |
-          find src -name "*.rs" -type f | sort > rust-files.txt
+          # Create a default empty list if clippy-results.json doesn't exist or is empty
+          if [ ! -f "clippy-results.json" ] || [ ! -s "clippy-results.json" ]; then
+            echo "[]" > clippy-results.json
+            find src -name "*.rs" -type f | head -n 5 > rust-files-to-analyze.txt
+          else
+            # Extract file paths from Clippy results
+            grep -o '"file":"[^"]*"' clippy-results.json | awk -F'"' '{print $4}' | sort | uniq > rust-files-to-analyze.txt
+            
+            # If no files were found in Clippy results, include some default Rust files
+            if [ ! -s rust-files-to-analyze.txt ]; then
+              find src -name "*.rs" -type f | head -n 5 > rust-files-to-analyze.txt
+            fi
+          fi
+          
+          # Limit the number of files to analyze
+          MAX_FILES=10
+          head -n $MAX_FILES rust-files-to-analyze.txt > rust-files-limited.txt
+          
+          # Create directory for code contents
           mkdir -p code-contents
+          
+          # Collect code content from files
+          CODE_CONTENT=""
           while IFS= read -r file; do
-            file_id=$(echo "$file" | sed 's/\//_/g')
-            cat "$file" > "code-contents/$file_id"
-          done < rust-files.txt
+            if [ -f "$file" ]; then
+              file_id=$(echo "$file" | sed 's/\//_/g')
+              cat "$file" > "code-contents/$file_id"
+              FILE_CONTENT=$(cat "$file")
+              CODE_CONTENT+="File: $file\n\`\`\`rust\n$FILE_CONTENT\n\`\`\`\n\n"
+            fi
+          done < rust-files-limited.txt
+          
+          echo "$CODE_CONTENT" > code-content.txt
       
       - name: Analyze code with Claude and get fixes
         id: claude-analysis
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          # Ensure clippy and audit results exist
           if [ ! -f "clippy-results.json" ]; then
             echo "clippy-results.json not found, creating empty file"
             echo "[]" > clippy-results.json
@@ -78,29 +106,21 @@ jobs:
             echo "{}" > audit-results.json
           fi
           
-          CLIPPY_OUTPUT=$(cat clippy-results.json)
-          AUDIT_OUTPUT=$(cat audit-results.json)
+          # Create secure temporary files
+          CLIPPY_FILE=$(mktemp)
+          AUDIT_FILE=$(mktemp)
+          CODE_FILE=$(mktemp)
           
-          MAX_FILES=10
-          head -n $MAX_FILES rust-files.txt > rust-files-limited.txt
-          
-          CODE_CONTENT=""
-          while IFS= read -r file; do
-            file_id=$(echo "$file" | sed 's/\//_/g')
-            file_content=$(cat "code-contents/$file_id")
-            CODE_CONTENT+="File: $file\n\`\`\`rust\n$file_content\n\`\`\`\n\n"
-          done < rust-files-limited.txt
-          
-          # Save data to temporary files for jq
-          echo "$CLIPPY_OUTPUT" > clippy-results.tmp
-          echo "$AUDIT_OUTPUT" > audit-results.tmp
-          echo "$CODE_CONTENT" > code-content.tmp
+          # Store content in temporary files
+          cat clippy-results.json > "$CLIPPY_FILE"
+          cat audit-results.json > "$AUDIT_FILE"
+          cat code-content.txt > "$CODE_FILE"
           
           echo "Constructing JSON request using jq with temporary files..."
           REQUEST_BODY=$(jq -n \
-            --slurpfile clippy clippy-results.tmp \
-            --slurpfile audit audit-results.tmp \
-            --rawfile code code-content.tmp \
+            --slurpfile clippy "$CLIPPY_FILE" \
+            --slurpfile audit "$AUDIT_FILE" \
+            --rawfile code "$CODE_FILE" \
             '{
               "model": "claude-3-7-sonnet-20250219",
               "max_tokens": 4000,
@@ -108,13 +128,23 @@ jobs:
               "messages": [
                 {
                   "role": "user",
-                  "content": "You are a Rust code improvement expert. I need you to analyze the following Rust code, Clippy warnings, and Cargo Audit results, then provide specific fixes.\n\nClippy Results:\n" + ($clippy[0] | tostring) + "\n\nAudit Results:\n" + ($audit[0] | tostring) + "\n\nCode Files:\n" + $code + "\n\nPlease provide the following in your response:\n\n1. A markdown report summarizing the issues found\n2. For each issue that can be automatically fixed, provide a JSON object in the following format surrounded by <FIXES> tags:\n\n<FIXES>\n[\n  {\n    \"file\": \"path/to/file.rs\",\n    \"changes\": [\n      {\n        \"original\": \"problematic code snippet\",\n        \"fixed\": \"corrected code snippet\"\n      }\n    ]\n  }\n]\n</FIXES>\n\nMake sure the changes are minimal, correct, and maintain the same functionality. Focus on fixes for security issues, performance problems, and code quality issues. The JSON must be valid and the code snippets must be exact matches of what is in the files."
+                  "content": "You are a Rust code improvement expert. I need you to analyze the following Rust code, Clippy warnings, and Cargo Audit results, then provide specific fixes.\n\nClippy Results:\n\($clippy[0] | tostring)\n\nAudit Results:\n\($audit[0] | tostring)\n\nCode Files:\n\($code)\n\nPlease provide the following in your response:\n\n1. A markdown report summarizing the issues found\n2. For each issue that can be automatically fixed, provide a JSON object in the following format surrounded by <FIXES> tags:\n\n<FIXES>\n[\n  {\n    \"file\": \"path/to/file.rs\",\n    \"changes\": [\n      {\n        \"original\": \"problematic code snippet\",\n        \"fixed\": \"corrected code snippet\"\n      }\n    ]\n  }\n]\n</FIXES>\n\nMake sure the changes are minimal, correct, and maintain the same functionality. Focus on fixes for security issues, performance problems, and code quality issues. The JSON must be valid and the code snippets must be exact matches of what is in the files."
                 }
               ]
             }')
           
-          # Remove temporary files
-          rm clippy-results.tmp audit-results.tmp code-content.tmp
+          # Validate JSON before sending to API
+          echo "$REQUEST_BODY" | jq empty
+          if [ $? -ne 0 ]; then
+            echo "Error: Invalid JSON generated!"
+            # Remove temporary files
+            rm -f "$CLIPPY_FILE" "$AUDIT_FILE" "$CODE_FILE"
+            echo "fixes_available=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Remove temporary files after processing
+          rm -f "$CLIPPY_FILE" "$AUDIT_FILE" "$CODE_FILE"
           
           echo "Calling Claude API for analysis and fixes..."
           RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
