@@ -1,132 +1,117 @@
-// src/lib.rs
-// Expose Rustloader functionality as a library for the GUI
-
-mod version;
-pub use version::VERSION;
-
-pub mod cli;
-pub mod dependency_validator;
-pub mod downloader;
-pub mod error;
-pub mod license;
-pub mod security;
-pub mod utils;
-
-use crate::dependency_validator::validate_dependencies;
-use crate::downloader::download_video_free;
-use crate::license::{activate_license, is_pro_version, LicenseStatus}; // Removed display_license_info
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use tokio::runtime::Runtime;
+use std::time::{Duration, Instant};
+use serde::{Serialize, Deserialize};
+use once_cell::sync::Lazy;
 
-/// Download a video using Rustloader core functionality
-/// This function is designed to be called from the Tauri GUI
-pub fn download_video(
-    url: &str,
-    quality: Option<&str>,
-    format: &str,
-    start_time: Option<String>,
-    end_time: Option<String>,
-    use_playlist: bool,
-    download_subtitles: bool,
-    output_dir: Option<String>,
-) -> Result<String, String> {
-    // Set up a runtime for async operations
-    let rt = Runtime::new().map_err(|e| e.to_string())?;
-
-    // Create a progress tracker for the UI to access
-    let progress = Arc::new(Mutex::new(0));
-    let progress_clone = Arc::clone(&progress);
-
-    // Run the download operation in the runtime
-    let result = rt.block_on(async {
-        // Optional: Check dependencies
-        match validate_dependencies() {
-            Ok(_) => (),
-            Err(e) => {
-                return Err(format!("Dependency check failed: {}", e));
-            }
-        }
-
-        // Convert Option<String> to Option<&String> for the function call
-        let start_ref = start_time.as_ref();
-        let end_ref = end_time.as_ref();
-        let output_ref = output_dir.as_ref();
-
-        // Set up a thread to update the progress
-        let progress_updater = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let mut p = progress_clone.lock().unwrap();
-                if *p >= 100 {
-                    break;
-                }
-                *p += 1;
-                if *p > 99 {
-                    *p = 99; // Stay at 99% until complete
-                }
-            }
-        });
-
-        // Call the download function
-        let download_result = download_video_free(
-            url,
-            quality,
-            format,
-            start_ref,
-            end_ref,
-            use_playlist,
-            download_subtitles,
-            output_ref.as_deref(),
-            false, // force_download
-            None,  // bitrate
-        )
-        .await;
-
-        // Set progress to 100% when finished
-        let mut p = progress.lock().unwrap();
-        *p = 100;
-
-        // Abort the progress updater
-        progress_updater.abort();
-
-        // Convert the AppError to String for error cases
-        download_result.map_err(|e| format!("{}", e))
-    });
-
-    // Convert the result
-    match result {
-        Ok(_) => Ok("Download completed successfully".to_string()),
-        Err(e) => Err(format!("Download failed: {}", e)),
+// Progress tracking state using atomics for thread safety
+static DOWNLOAD_PROGRESS: Lazy<ProgressState> = Lazy::new(|| {
+    ProgressState {
+        progress: AtomicU64::new(0),
+        downloaded_bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        speed: Mutex::new(0.0),
+        eta: Mutex::new(None),
+        filename: Mutex::new(String::new()),
+        last_update: Mutex::new(Instant::now()),
     }
+});
+
+struct ProgressState {
+    progress: AtomicU64,
+    downloaded_bytes: AtomicU64,
+    total_bytes: AtomicU64,
+    speed: Mutex<f64>,
+    eta: Mutex<Option<Duration>>,
+    filename: Mutex<String>,
+    last_update: Mutex<Instant>,
 }
 
-/// Get the current download progress (0-100)
-pub fn get_download_progress(progress: Arc<Mutex<i32>>) -> i32 {
-    let p = progress.lock().unwrap();
-    *p
+#[derive(Serialize, Deserialize)]
+pub struct ProgressData {
+    pub progress: u64,
+    #[serde(rename = "fileName")]
+    pub file_name: String,
+    #[serde(rename = "fileSize")]
+    pub file_size: u64,
+    pub speed: f64,
+    #[serde(rename = "timeRemaining")]
+    pub time_remaining: Option<u64>,
 }
 
-/// Check if Pro version is active
-pub fn check_is_pro() -> bool {
-    is_pro_version()
-}
-
-/// Activate a Pro license
-pub fn activate_pro_license(key: &str, email: &str) -> Result<String, String> {
-    match activate_license(key, email) {
-        Ok(LicenseStatus::Pro(_)) => Ok("License activated successfully".to_string()),
-        Ok(_) => Err("Invalid license activation response".to_string()),
-        Err(e) => Err(format!("License activation failed: {}", e)),
-    }
-}
-
-/// Get license information
-pub fn get_license_info() -> Result<String, String> {
-    // Re-implement without using display_license_info
-    if is_pro_version() {
-        Ok("Pro license is active. Enjoy all premium features!".to_string())
+// Function to update progress information (called from downloader module)
+pub fn update_download_progress(
+    progress: u64,
+    _downloaded: u64,
+    total: u64,
+    current_speed: f64,
+    filename: &str,
+) {
+    DOWNLOAD_PROGRESS.progress.store(progress, Ordering::SeqCst);
+    DOWNLOAD_PROGRESS.downloaded_bytes.store(_downloaded, Ordering::SeqCst);
+    DOWNLOAD_PROGRESS.total_bytes.store(total, Ordering::SeqCst);
+    
+    let mut speed = DOWNLOAD_PROGRESS.speed.lock().unwrap();
+    *speed = current_speed;
+    
+    let mut eta = DOWNLOAD_PROGRESS.eta.lock().unwrap();
+    if total > 0 && current_speed > 0.0 {
+        let remaining_bytes = total.saturating_sub(_downloaded) as f64;
+        let seconds_remaining = remaining_bytes / current_speed;
+        *eta = Some(std::time::Duration::from_secs_f64(seconds_remaining));
     } else {
-        Ok("Free version in use. Upgrade to Pro for additional features.".to_string())
+        *eta = None;
     }
+    
+    if !filename.is_empty() {
+        let mut current_filename = DOWNLOAD_PROGRESS.filename.lock().unwrap();
+        *current_filename = filename.to_string();
+    }
+    
+    let mut last_update = DOWNLOAD_PROGRESS.last_update.lock().unwrap();
+    *last_update = std::time::Instant::now();
+}
+
+
+// Function to get current progress (called from GUI)
+pub fn get_download_progress() -> Result<ProgressData, String> {
+    let progress = DOWNLOAD_PROGRESS.progress.load(Ordering::SeqCst);
+    let downloaded = DOWNLOAD_PROGRESS.downloaded_bytes.load(Ordering::SeqCst);
+    let total = DOWNLOAD_PROGRESS.total_bytes.load(Ordering::SeqCst);
+    
+    let speed = *DOWNLOAD_PROGRESS.speed.lock().map_err(|e| e.to_string())?;
+    let eta = DOWNLOAD_PROGRESS.eta.lock().map_err(|e| e.to_string())?.map(|d| d.as_secs());
+    let filename = DOWNLOAD_PROGRESS.filename.lock().map_err(|e| e.to_string())?.clone();
+    
+    let last_update = *DOWNLOAD_PROGRESS.last_update.lock().map_err(|e| e.to_string())?;
+    if last_update.elapsed() > Duration::from_secs(5) && progress > 0 && progress < 100 {
+        return Err("Download progress information is stale".to_string());
+    }
+    
+    Ok(ProgressData {
+        progress,
+        file_name: filename,
+        file_size: total,
+        speed,
+        time_remaining: eta,
+    })
+}
+
+// Function to reset progress tracking (called when starting a new download)
+pub fn reset_download_progress() {
+    DOWNLOAD_PROGRESS.progress.store(0, Ordering::SeqCst);
+    DOWNLOAD_PROGRESS.downloaded_bytes.store(0, Ordering::SeqCst);
+    DOWNLOAD_PROGRESS.total_bytes.store(0, Ordering::SeqCst);
+    
+    let mut speed = DOWNLOAD_PROGRESS.speed.lock().unwrap();
+    *speed = 0.0;
+    
+    let mut eta = DOWNLOAD_PROGRESS.eta.lock().unwrap();
+    *eta = None;
+    
+    let mut filename = DOWNLOAD_PROGRESS.filename.lock().unwrap();
+    *filename = String::new();
+    
+    let mut last_update = DOWNLOAD_PROGRESS.last_update.lock().unwrap();
+    *last_update = Instant::now();
 }
