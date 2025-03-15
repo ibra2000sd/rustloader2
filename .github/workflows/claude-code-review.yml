@@ -1,0 +1,58 @@
+name: Claude Code Review
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          override: true
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --message-format=json > clippy-results.json
+      
+      - name: Run Cargo Audit
+        run: |
+          cargo install cargo-audit
+          cargo audit --json > audit-results.json
+
+      - name: Analyze code with Claude
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          CLIPPY_OUTPUT=$(cat clippy-results.json)
+          AUDIT_OUTPUT=$(cat audit-results.json)
+          
+          # Create a list of all Rust files
+          RUST_FILES=$(find src -name "*.rs" | tr '\n' ' ')
+          
+          # Prepare request to Claude API
+          curl -X POST "https://api.anthropic.com/v1/messages" \
+          -H "x-api-key: $CLAUDE_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -d @- <<EOF
+          {
+            "model": "claude-3-7-sonnet-20250219",
+            "max_tokens": 4000,
+            "temperature": 0.2,
+            "messages": [
+              {
+                "role": "user", 
+                "content": "Analyze the following Rust project files. These are the Clippy warnings and Cargo Audit results. Identify issues, suggest fixes, and create a report. Focus on security, performance, error handling, and code quality.\n\nClippy Results:\n$CLIPPY_OUTPUT\n\nAudit Results:\n$AUDIT_OUTPUT\n\nPlease create a markdown report summarizing issues and suggested fixes."
+              }
+            ]
+          }
+          EOF
