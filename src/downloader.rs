@@ -911,7 +911,7 @@ pub async fn download_video_free(
 
     println!("{}: {}", "Video quality".blue(), quality.unwrap_or("auto"));
     
-    let command = YtdlpCommandBuilder::new(url, &output_path)
+    let mut command = YtdlpCommandBuilder::new(url, &output_path)
         .with_format(format)
         .with_quality(quality)
         .with_time_range(start_time, end_time)

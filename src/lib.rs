@@ -76,7 +76,7 @@ pub fn update_download_progress(
 // Function to get current progress (called from GUI)
 pub fn get_download_progress() -> Result<ProgressData, String> {
     let progress = DOWNLOAD_PROGRESS.progress.load(Ordering::SeqCst);
-    let downloaded = DOWNLOAD_PROGRESS.downloaded_bytes.load(Ordering::SeqCst);
+    let _downloaded = DOWNLOAD_PROGRESS.downloaded_bytes.load(Ordering::SeqCst);
     let total = DOWNLOAD_PROGRESS.total_bytes.load(Ordering::SeqCst);
     
     let speed = *DOWNLOAD_PROGRESS.speed.lock().map_err(|e| e.to_string())?;
