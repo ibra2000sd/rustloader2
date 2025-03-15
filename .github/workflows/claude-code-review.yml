@@ -1,45 +1,89 @@
-name: Claude Code Review
-
+name: Claude Code Review and Auto-Fix
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
 jobs:
-  code-review:
+  code-review-and-fix:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
+        with:
+          fetch-depth: 0
+      
+      - name: Check for Claude API Key
+        run: |
+          if [ -z "${{ secrets.CLAUDE_API_KEY }}" ]; then
+            echo "::error::CLAUDE_API_KEY is not set in repository secrets. Please add it before running this workflow."
+            exit 1
+          fi
+      
+      - name: Configure Git
+        run: |
+          git config user.name "Claude AutoFix Bot"
+          git config user.email "claude-bot@example.com"
+      
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: clippy
           override: true
-
+      
       - name: Run Clippy
-        run: cargo clippy --all-targets --message-format=json > clippy-results.json
+        run: cargo clippy --all-targets --message-format=json > clippy-results.json || echo "Clippy found issues, continuing workflow"
       
       - name: Run Cargo Audit
+        continue-on-error: true
         run: |
           cargo install cargo-audit
-          cargo audit --json > audit-results.json
-
-      - name: Analyze code with Claude
+          cargo audit --json > audit-results.json || echo "Cargo audit found security issues, continuing workflow"
+      
+      - name: Collect Rust files
+        run: |
+          find src -name "*.rs" -type f | sort > rust-files.txt
+          mkdir -p code-contents
+          while IFS= read -r file; do
+            file_id=$(echo "$file" | sed 's/\//_/g')
+            cat "$file" > "code-contents/$file_id"
+          done < rust-files.txt
+      
+      - name: Analyze code with Claude and get fixes
+        id: claude-analysis
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          if [ ! -f "clippy-results.json" ]; then
+            echo "clippy-results.json not found, creating empty file"
+            echo "[]" > clippy-results.json
+          fi
+          
+          if [ ! -f "audit-results.json" ]; then
+            echo "audit-results.json not found, creating empty file"
+            echo "{}" > audit-results.json
+          fi
+          
           CLIPPY_OUTPUT=$(cat clippy-results.json)
           AUDIT_OUTPUT=$(cat audit-results.json)
           
-          # Create a list of all Rust files
-          RUST_FILES=$(find src -name "*.rs" | tr '\n' ' ')
+          MAX_FILES=10
+          head -n $MAX_FILES rust-files.txt > rust-files-limited.txt
           
-          # Prepare request to Claude API
-          curl -X POST "https://api.anthropic.com/v1/messages" \
+          CODE_CONTENT=""
+          while IFS= read -r file; do
+            file_id=$(echo "$file" | sed 's/\//_/g')
+            file_content=$(cat "code-contents/$file_id")
+            CODE_CONTENT+="File: $file\n\`\`\`rust\n$file_content\n\`\`\`\n\n"
+          done < rust-files-limited.txt
+          
+          echo "Calling Claude API for analysis and fixes..."
+          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
           -H "x-api-key: $CLAUDE_API_KEY" \
           -H "anthropic-version: 2023-06-01" \
           -H "content-type: application/json" \
@@ -51,8 +95,191 @@ jobs:
             "messages": [
               {
                 "role": "user", 
-                "content": "Analyze the following Rust project files. These are the Clippy warnings and Cargo Audit results. Identify issues, suggest fixes, and create a report. Focus on security, performance, error handling, and code quality.\n\nClippy Results:\n$CLIPPY_OUTPUT\n\nAudit Results:\n$AUDIT_OUTPUT\n\nPlease create a markdown report summarizing issues and suggested fixes."
+                "content": "You are a Rust code improvement expert. I need you to analyze the following Rust code, Clippy warnings, and Cargo Audit results, then provide specific fixes.\n\nClippy Results:\n$CLIPPY_OUTPUT\n\nAudit Results:\n$AUDIT_OUTPUT\n\nCode Files:\n$CODE_CONTENT\n\nPlease provide the following in your response:\n\n1. A markdown report summarizing the issues found\n2. For each issue that can be automatically fixed, provide a JSON object in the following format surrounded by <FIXES> tags:\n\n<FIXES>\n[\n  {\n    \"file\": \"path/to/file.rs\",\n    \"changes\": [\n      {\n        \"original\": \"problematic code snippet\",\n        \"fixed\": \"corrected code snippet\"\n      }\n    ]\n  }\n]\n</FIXES>\n\nMake sure the changes are minimal, correct, and maintain the same functionality. Focus on fixes for security issues, performance problems, and code quality issues. The JSON must be valid and the code snippets must be exact matches of what's in the files."
               }
             ]
           }
           EOF
+          )
+          
+          if [ $? -ne 0 ] || [[ "$RESPONSE" == *"error"* ]]; then
+            echo "Error calling Claude API:"
+            echo "$RESPONSE"
+            echo "fixes_available=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "$RESPONSE" > claude-full-response.json
+          REPORT=$(echo "$RESPONSE" | jq -r '.content[0].text')
+          echo "$REPORT" > claude-analysis-report.md
+          
+          if echo "$REPORT" | grep -q "<FIXES>"; then
+            echo "Found fixes in Claude's response."
+            FIXES=$(echo "$REPORT" | awk '/<FIXES>/{flag=1;next}/<\/FIXES>/{flag=0}flag')
+            echo "$FIXES" > fixes.json
+            
+            if jq empty fixes.json 2>/dev/null; then
+              echo "Valid JSON found in fixes.json"
+              echo "fixes_available=true" >> $GITHUB_OUTPUT
+            else
+              echo "Invalid JSON in fixes.json. Cannot proceed with automatic fixes."
+              echo "fixes_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "No fixes found in Claude's response."
+            echo "[]" > fixes.json
+            echo "fixes_available=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Apply fixes
+        if: steps.claude-analysis.outputs.fixes_available == 'true'
+        id: apply-fixes
+        run: |
+          cat <<EOF > apply_fixes.py
+          #!/usr/bin/env python3
+          import json
+          import os
+          import sys
+          
+          MAX_CHANGES_PER_FILE = 10
+          MAX_CHANGE_PERCENTAGE = 20
+          
+          def apply_fixes(fixes_file):
+              try:
+                  with open(fixes_file, 'r') as f:
+                      fixes = json.load(f)
+              except json.JSONDecodeError:
+                  print("Invalid JSON in fixes file")
+                  return False
+              
+              changes_applied = 0
+              files_modified = 0
+              
+              for fix in fixes:
+                  file_path = fix.get('file')
+                  changes = fix.get('changes', [])
+                  
+                  if not file_path or not os.path.exists(file_path) or len(changes) > MAX_CHANGES_PER_FILE:
+                      print(f"Skipping fixes for {file_path}: not found or too many changes")
+                      continue
+                  
+                  try:
+                      with open(file_path, 'r') as f:
+                          content = f.read()
+                      
+                      original_length = len(content)
+                      modified_content = content
+                      file_changes = 0
+                      
+                      for change in changes:
+                          original = change.get('original')
+                          fixed = change.get('fixed')
+                          
+                          if not original or not fixed or original not in modified_content:
+                              print(f"Skipping change in {file_path}: original code not found")
+                              continue
+                          
+                          modified_content = modified_content.replace(original, fixed)
+                          file_changes += 1
+                      
+                      if len(modified_content) > 0:
+                          diff_percentage = abs(len(modified_content) - original_length) / len(modified_content) * 100
+                          if diff_percentage > MAX_CHANGE_PERCENTAGE:
+                              print(f"Skipping {file_path}: changes too large ({diff_percentage:.2f}%)")
+                              continue
+                      
+                      if modified_content != content and file_changes > 0:
+                          with open(file_path, 'w') as f:
+                              f.write(modified_content)
+                          print(f"Applied {file_changes} changes to {file_path}")
+                          changes_applied += file_changes
+                          files_modified += 1
+                  
+                  except Exception as e:
+                      print(f"Error processing {file_path}: {e}")
+              
+              print(f"Total: {changes_applied} changes applied to {files_modified} files")
+              return changes_applied > 0
+          
+          if __name__ == "__main__":
+              if len(sys.argv) < 2:
+                  print("Usage: python apply_fixes.py <fixes_file>")
+                  sys.exit(1)
+              
+              success = apply_fixes(sys.argv[1])
+              sys.exit(0 if success else 1)
+          EOF
+          
+          chmod +x apply_fixes.py
+          python3 apply_fixes.py fixes.json
+          
+          if [ $? -eq 0 ]; then
+            echo "fixes_applied=true" >> $GITHUB_OUTPUT
+          else
+            echo "fixes_applied=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run cargo check after fixes
+        if: steps.apply-fixes.outputs.fixes_applied == 'true'
+        run: |
+          if cargo check; then
+            echo "check_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: Fixed code doesn't compile. Reverting changes..."
+            git checkout -- .
+            echo "check_passed=false" >> $GITHUB_OUTPUT
+          fi
+        id: check-fixes
+      
+      - name: Commit and push changes
+        if: steps.apply-fixes.outputs.fixes_applied == 'true' && steps.check-fixes.outputs.check_passed == 'true' && github.event_name == 'pull_request'
+        run: |
+          git add .
+          git commit -m "Apply automated fixes suggested by Claude [skip ci]" || echo "No changes to commit"
+          
+          PR_BRANCH="${GITHUB_HEAD_REF}"
+          git push origin "HEAD:${PR_BRANCH}" || echo "No changes to push"
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            let report = '';
+            try {
+              report = fs.readFileSync('claude-analysis-report.md', 'utf8');
+            } catch (error) {
+              report = "Error reading analysis report.";
+            }
+            
+            const fixesAvailable = '${{ steps.claude-analysis.outputs.fixes_available }}' === 'true';
+            const fixesApplied = '${{ steps.apply-fixes.outputs.fixes_applied }}' === 'true';
+            const checksPass = '${{ steps.check-fixes.outputs.check_passed }}' === 'true';
+            
+            let comment = `## Claude Code Analysis Report\n\n`;
+            
+            if (fixesAvailable) {
+              if (fixesApplied) {
+                if (checksPass) {
+                  comment += `✅ **Automated fixes have been applied** to your code and the code compiles successfully.\n\n`;
+                } else {
+                  comment += `⚠️ **Automated fixes were generated** but caused compilation errors and were reverted.\n\n`;
+                }
+              } else {
+                comment += `ℹ️ **Fixes were identified** but could not be applied automatically.\n\n`;
+              }
+            } else {
+              comment += `ℹ️ **Analysis completed**, but no automatic fixes were needed or provided.\n\n`;
+            }
+            
+            comment += `<details><summary>Click to view the full analysis report</summary>\n\n${report}\n</details>`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
