@@ -1,11 +1,5 @@
-// src/downloader.rs
-
-use crate::dependency_validator::is_ffmpeg_available;
 use crate::error::AppError;
-use crate::utils::{
-    format_output_path, initialize_download_dir, validate_bitrate, validate_path_safety,
-    validate_time_format, validate_url,
-};
+use crate::utils::{format_output_path, initialize_download_dir, validate_bitrate, validate_path_safety, validate_time_format, validate_url};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
 use colored::*;
@@ -14,6 +8,7 @@ use hostname;
 use humansize::{format_size, BINARY};
 use indicatif::{ProgressBar, ProgressStyle};
 use notify_rust::Notification;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use regex::Regex;
 use ring::{digest, hmac};
@@ -28,18 +23,56 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as AsyncCommand;
 
-// Constants for free version limitations - audio bitrate limit
-// Note: MAX_FREE_QUALITY removed as it's no longer used
 const FREE_MP3_BITRATE: &str = "128K";
 
-// Enhanced progress tracking
+static FFMPEG_AVAILABLE: Lazy<bool> = Lazy::new(|| {
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    
+    let common_paths = vec![
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
+        "/snap/bin/ffmpeg",
+        "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+        "C:\\ffmpeg\\bin\\ffmpeg.exe",
+    ];
+    
+    for path in common_paths {
+        if Path::new(path).exists() {
+            return true;
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    let which_cmd = "where";
+    #[cfg(not(target_os = "windows"))]
+    let which_cmd = "which";
+
+    if let Ok(output) = std::process::Command::new(which_cmd).arg("ffmpeg").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() && std::path::Path::new(&path).exists() {
+                return true;
+            }
+        }
+    }
+    
+    false
+});
+
 struct DownloadProgress {
-    #[allow(dead_code)]
     start_time: Instant,
     last_update: Mutex<Instant>,
     downloaded_bytes: AtomicU64,
     total_bytes: AtomicU64,
-    download_speed: Mutex<f64>, // bytes per second
+    download_speed: Mutex<f64>,
     last_speed_samples: Mutex<Vec<f64>>,
 }
 
@@ -56,30 +89,33 @@ impl DownloadProgress {
     }
 
     fn update(&self, downloaded: u64, total: u64) {
+        let current_downloaded = self.downloaded_bytes.load(Ordering::SeqCst);
+        
+        let bytes_diff = if downloaded > current_downloaded {
+            downloaded - current_downloaded
+        } else {
+            0
+        };
+        
         self.downloaded_bytes.store(downloaded, Ordering::SeqCst);
         self.total_bytes.store(total, Ordering::SeqCst);
 
         let now = Instant::now();
-
         let mut last_update = self.last_update.lock().unwrap();
         let time_diff = now.duration_since(*last_update).as_millis();
 
-        if time_diff >= 100 {
+        if time_diff >= 100 && bytes_diff > 0 {
             let mut last_speed_samples = self.last_speed_samples.lock().unwrap();
             let mut speed = self.download_speed.lock().unwrap();
 
-            if let Some(last_downloaded) = self
-                .downloaded_bytes
-                .load(Ordering::SeqCst)
-                .checked_sub(downloaded)
-            {
-                let current_speed = last_downloaded as f64 / (time_diff as f64 / 1000.0);
-
-                last_speed_samples.push(current_speed);
-                if last_speed_samples.len() > 10 {
-                    last_speed_samples.remove(0);
-                }
-
+            let current_speed = bytes_diff as f64 / (time_diff as f64 / 1000.0);
+            
+            last_speed_samples.push(current_speed);
+            if last_speed_samples.len() > 10 {
+                last_speed_samples.remove(0);
+            }
+            
+            if !last_speed_samples.is_empty() {
                 let sum: f64 = last_speed_samples.iter().sum();
                 *speed = sum / last_speed_samples.len() as f64;
             }
@@ -91,11 +127,7 @@ impl DownloadProgress {
     fn get_percentage(&self) -> u64 {
         let downloaded = self.downloaded_bytes.load(Ordering::SeqCst);
         let total = self.total_bytes.load(Ordering::SeqCst);
-
-        if total == 0 {
-            return 0;
-        }
-
+        if total == 0 { return 0; }
         (downloaded as f64 / total as f64 * 100.0) as u64
     }
 
@@ -114,7 +146,6 @@ impl DownloadProgress {
 
         let remaining_bytes = total - downloaded;
         let seconds_remaining = remaining_bytes as f64 / speed;
-
         Some(Duration::from_secs_f64(seconds_remaining))
     }
 
@@ -143,7 +174,6 @@ impl DownloadProgress {
         if speed <= 0.0 {
             return "Calculating...".to_string();
         }
-
         format!("{}/s", format_size(speed as u64, BINARY))
     }
 
@@ -155,48 +185,10 @@ impl DownloadProgress {
             return format!("{} / Unknown", format_size(downloaded, BINARY));
         }
 
-        format!(
-            "{} / {}",
-            format_size(downloaded, BINARY),
-            format_size(total, BINARY)
-        )
+        format!("{} / {}", format_size(downloaded, BINARY), format_size(total, BINARY))
     }
 }
 
-// Updated promotional messages to focus on AI features instead of speed
-struct DownloadPromo {
-    download_messages: Vec<String>,
-    completion_messages: Vec<String>,
-}
-
-impl DownloadPromo {
-    fn new() -> Self {
-        Self {
-            download_messages: vec![
-                "🤖 AI-powered video enhancement available in Rustloader Pro! 🤖".to_string(),
-                "💎 Get advanced subtitle features with Rustloader Pro! 💎".to_string(),
-                "✨ Unlock advanced post-processing with Rustloader Pro! ✨".to_string(),
-            ],
-            completion_messages: vec![
-                "✨ Enjoy your download! Upgrade to Pro for AI-powered features: rustloader.com/pro ✨".to_string(),
-                "🚀 Rustloader Pro removes daily limits and adds AI capabilities. Learn more: rustloader.com/pro 🚀".to_string(),
-                "💎 Thanks for using Rustloader! Upgrade to Pro for advanced features: rustloader.com/pro 💎".to_string(),
-            ],
-        }
-    }
-
-    fn get_random_download_message(&self) -> &str {
-        let idx = rand::thread_rng().gen_range(0..self.download_messages.len());
-        &self.download_messages[idx]
-    }
-
-    fn get_random_completion_message(&self) -> &str {
-        let idx = rand::thread_rng().gen_range(0..self.completion_messages.len());
-        &self.completion_messages[idx]
-    }
-}
-
-// Download counter for tracking daily limits with secure storage
 struct DownloadCounter {
     today_count: u32,
     date: String,
@@ -208,7 +200,7 @@ impl DownloadCounter {
         Self {
             today_count: 0,
             date: Local::now().format("%Y-%m-%d").to_string(),
-            max_daily_downloads: 5, // Free tier limit
+            max_daily_downloads: 5,
         }
     }
 
@@ -219,29 +211,25 @@ impl DownloadCounter {
         };
 
         let digest = digest::digest(&digest::SHA256, machine_id.as_bytes());
-        digest.as_ref().to_vec()
+        digest.as_ref()[..16].to_vec()
     }
 
     fn get_machine_id() -> Result<String, AppError> {
         #[cfg(target_os = "linux")]
         {
-            match fs::read_to_string("/etc/machine-id") {
-                Ok(id) => return Ok(id.trim().to_string()),
-                Err(_) => {}
+            if let Ok(id) = fs::read_to_string("/etc/machine-id") {
+                return Ok(id.trim().to_string());
             }
         }
 
         #[cfg(target_os = "macos")]
         {
             use std::process::Command;
-
-            let output_result = Command::new("ioreg")
+            if let Ok(output) = Command::new("ioreg")
                 .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-                .output();
-
-            if let Ok(output) = output_result {
+                .output()
+            {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-
                 if let Some(line) = stdout.lines().find(|line| line.contains("IOPlatformUUID")) {
                     if let Some(uuid_start) = line.find("\"") {
                         if let Some(uuid_end) = line[uuid_start + 1..].find("\"") {
@@ -256,9 +244,7 @@ impl DownloadCounter {
         {
             use winreg::enums::*;
             use winreg::RegKey;
-
-            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-            if let Ok(key) = hklm.open_subkey("SOFTWARE\\Microsoft\\Cryptography") {
+            if let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\Microsoft\\Cryptography") {
                 if let Ok(guid) = key.get_value::<String, _>("MachineGuid") {
                     return Ok(guid);
                 }
@@ -267,115 +253,76 @@ impl DownloadCounter {
 
         match hostname::get() {
             Ok(name) => Ok(name.to_string_lossy().to_string()),
-            Err(_) => Err(AppError::General(
-                "Could not determine machine ID".to_string(),
-            )),
-        }
-    }
-
-    fn encrypt_counter_data(&self) -> Result<String, AppError> {
-        let content = format!("{},{}", self.date, self.today_count);
-
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &Self::get_counter_key());
-        let signature = hmac::sign(&key, content.as_bytes());
-        let signature_b64 = general_purpose::STANDARD.encode(signature.as_ref());
-
-        let full_data = format!("{}\n{}", content, signature_b64);
-
-        Ok(general_purpose::STANDARD.encode(full_data.as_bytes()))
-    }
-
-    fn decrypt_counter_data(encrypted_data: &str) -> Result<(String, u32), AppError> {
-        let decoded_bytes = match general_purpose::STANDARD.decode(encrypted_data) {
-            Ok(bytes) => bytes,
-            Err(_) => return Err(AppError::SecurityViolation),
-        };
-
-        let full_data = match String::from_utf8(decoded_bytes) {
-            Ok(data) => data,
-            Err(_) => return Err(AppError::SecurityViolation),
-        };
-
-        let parts: Vec<&str> = full_data.split('\n').collect();
-        if parts.len() != 2 {
-            return Err(AppError::SecurityViolation);
-        }
-
-        let content = parts[0];
-        let signature_b64 = parts[1];
-
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &Self::get_counter_key());
-        let signature_bytes = match general_purpose::STANDARD.decode(signature_b64) {
-            Ok(bytes) => bytes,
-            Err(_) => return Err(AppError::SecurityViolation),
-        };
-
-        match hmac::verify(&key, content.as_bytes(), &signature_bytes) {
-            Ok(_) => {
-                let data_parts: Vec<&str> = content.split(',').collect();
-                if data_parts.len() != 2 {
-                    return Err(AppError::SecurityViolation);
-                }
-
-                let date = data_parts[0].to_string();
-                let count: u32 = match data_parts[1].parse() {
-                    Ok(c) => c,
-                    Err(_) => return Err(AppError::SecurityViolation),
-                };
-
-                Ok((date, count))
-            }
-            Err(_) => Err(AppError::SecurityViolation),
-        }
-    }
-
-    fn load_from_disk() -> Result<Self, AppError> {
-        let counter_path = get_counter_path()?;
-
-        if counter_path.exists() {
-            let encrypted_contents = fs::read_to_string(&counter_path)?;
-
-            match Self::decrypt_counter_data(&encrypted_contents) {
-                Ok((date, count)) => {
-                    let today = Local::now().format("%Y-%m-%d").to_string();
-                    if date != today {
-                        return Ok(Self::new());
-                    }
-
-                    Ok(Self {
-                        today_count: count,
-                        date,
-                        max_daily_downloads: 5,
-                    })
-                }
-                Err(_) => {
-                    println!(
-                        "{}",
-                        "Warning: Download counter validation failed. Counter has been reset."
-                            .yellow()
-                    );
-                    let mut counter = Self::new();
-                    counter.today_count = counter.max_daily_downloads;
-
-                    if let Err(e) = counter.save_to_disk() {
-                        println!("{}: {}", "Error saving counter".red(), e);
-                    }
-
-                    Ok(counter)
-                }
-            }
-        } else {
-            Ok(Self::new())
+            Err(_) => Err(AppError::General("Could not determine machine ID".to_string())),
         }
     }
 
     fn save_to_disk(&self) -> Result<(), AppError> {
         let counter_path = get_counter_path()?;
-
-        let encrypted_data = self.encrypt_counter_data()?;
-
-        fs::write(counter_path, encrypted_data)?;
+        
+        let content = format!("{},{}", self.date, self.today_count);
+        
+        let key = hmac::Key::new(hmac::HMAC_SHA256, &Self::get_counter_key());
+        let signature = hmac::sign(&key, content.as_bytes());
+        let signature_b64 = general_purpose::STANDARD.encode(signature.as_ref());
+        
+        let data_with_signature = format!("{}\n{}", content, signature_b64);
+        fs::write(counter_path, data_with_signature)?;
+        
         Ok(())
+    }
+
+    fn load_from_disk() -> Result<Self, AppError> {
+        let counter_path = get_counter_path()?;
+
+        if !counter_path.exists() {
+            return Ok(Self::new());
+        }
+
+        let contents = fs::read_to_string(&counter_path)?;
+        let parts: Vec<&str> = contents.split('\n').collect();
+        
+        if parts.len() != 2 {
+            return Ok(Self::new());
+        }
+        
+        let content = parts[0];
+        let signature_b64 = parts[1];
+        
+        let key = hmac::Key::new(hmac::HMAC_SHA256, &Self::get_counter_key());
+        match general_purpose::STANDARD.decode(signature_b64) {
+            Ok(signature) => {
+                match hmac::verify(&key, content.as_bytes(), &signature) {
+                    Ok(_) => {
+                        let data_parts: Vec<&str> = content.split(',').collect();
+                        if data_parts.len() != 2 {
+                            return Ok(Self::new());
+                        }
+
+                        let date = data_parts[0].to_string();
+                        let today = Local::now().format("%Y-%m-%d").to_string();
+                        
+                        if date != today {
+                            return Ok(Self::new());
+                        }
+                        
+                        match data_parts[1].parse::<u32>() {
+                            Ok(count) => Ok(Self {
+                                today_count: count,
+                                date,
+                                max_daily_downloads: 5,
+                            }),
+                            Err(_) => Ok(Self::new()),
+                        }
+                    },
+                    Err(_) => {
+                        println!("{}", "Warning: Download counter validation failed. Counter has been reset.".yellow());
+                        Ok(Self::new())
+                    }
+                }
+            },
+            Err(_) => Ok(Self::new()),
+        }
     }
 
     fn increment(&mut self) -> Result<(), AppError> {
@@ -383,7 +330,6 @@ impl DownloadCounter {
         if today != self.date {
             self.date = today;
             self.today_count = 0;
-            println!("{}", "Daily download counter reset for new day.".blue());
         }
 
         self.today_count += 1;
@@ -421,36 +367,219 @@ fn get_counter_path() -> Result<PathBuf, AppError> {
     Ok(path)
 }
 
-// New function to enable parallel downloads (replaces ensure_single_threaded_download)
-fn enable_parallel_download(command: &mut AsyncCommand) {
-    command.arg("--concurrent-fragments").arg("4");
+struct DownloadPromo {
+    download_messages: Vec<String>,
+    completion_messages: Vec<String>,
+}
 
-    let aria2c_available = std::process::Command::new("aria2c")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+impl DownloadPromo {
+    fn new() -> Self {
+        Self {
+            download_messages: vec![
+                "🤖 AI-powered video enhancement available in Rustloader Pro! 🤖".to_string(),
+                "💎 Get advanced subtitle features with Rustloader Pro! 💎".to_string(),
+                "✨ Unlock advanced post-processing with Rustloader Pro! ✨".to_string(),
+            ],
+            completion_messages: vec![
+                "✨ Enjoy your download! Upgrade to Pro for AI-powered features: rustloader.com/pro ✨".to_string(),
+                "🚀 Rustloader Pro removes daily limits and adds AI capabilities. Learn more: rustloader.com/pro 🚀".to_string(),
+                "💎 Thanks for using Rustloader! Upgrade to Pro for advanced features: rustloader.com/pro 💎".to_string(),
+            ],
+        }
+    }
 
-    if aria2c_available {
-        command.arg("--downloader").arg("aria2c");
-        command.arg("--downloader-args").arg("aria2c:-x4");
-        command.arg("--downloader-args").arg("aria2c:-k1M");
-    } else {
-        command.arg("--downloader").arg("yt-dlp");
+    fn get_random_download_message(&self) -> &str {
+        let idx = rand::thread_rng().gen_range(0..self.download_messages.len());
+        &self.download_messages[idx]
+    }
+
+    fn get_random_completion_message(&self) -> &str {
+        let idx = rand::thread_rng().gen_range(0..self.completion_messages.len());
+        &self.completion_messages[idx]
     }
 }
 
-fn display_download_promo() {
-    let promo = DownloadPromo::new();
-    println!("{}", promo.get_random_download_message().bright_yellow());
+struct YtdlpCommandBuilder {
+    format: String,
+    quality: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    url: String,
+    output_path: String,
+    use_playlist: bool,
+    download_subtitles: bool,
+    force_download: bool,
+    bitrate: Option<String>,
 }
 
-fn display_completion_promo() {
-    let promo = DownloadPromo::new();
-    println!(
-        "\n{}\n",
-        promo.get_random_completion_message().bright_yellow()
-    );
+impl YtdlpCommandBuilder {
+    fn new(url: &str, output_path: &str) -> Self {
+        Self {
+            format: "mp4".to_string(),
+            quality: None,
+            start_time: None,
+            end_time: None,
+            url: url.to_string(),
+            output_path: output_path.to_string(),
+            use_playlist: false,
+            download_subtitles: false,
+            force_download: false,
+            bitrate: None,
+        }
+    }
+    
+    fn with_format(mut self, format: &str) -> Self {
+        self.format = format.to_string();
+        self
+    }
+    
+    fn with_quality(mut self, quality: Option<&str>) -> Self {
+        self.quality = quality.map(|s| s.to_string());
+        self
+    }
+    
+    fn with_time_range(mut self, start_time: Option<&String>, end_time: Option<&String>) -> Self {
+        self.start_time = start_time.cloned();
+        self.end_time = end_time.cloned();
+        self
+    }
+    
+    fn with_playlist(mut self, use_playlist: bool) -> Self {
+        self.use_playlist = use_playlist;
+        self
+    }
+    
+    fn with_subtitles(mut self, download_subtitles: bool) -> Self {
+        self.download_subtitles = download_subtitles;
+        self
+    }
+    
+    fn with_force_download(mut self, force: bool) -> Self {
+        self.force_download = force;
+        self
+    }
+    
+    fn with_bitrate(mut self, bitrate: Option<&String>) -> Self {
+        self.bitrate = bitrate.cloned();
+        self
+    }
+    
+    fn build(self) -> AsyncCommand {
+        let mut command = AsyncCommand::new("yt-dlp");
+        
+        let ffmpeg_required = self.format == "mp3" || 
+                            self.start_time.is_some() || 
+                            self.end_time.is_some();
+        
+        if ffmpeg_required && !*FFMPEG_AVAILABLE {
+            if self.format == "mp3" {
+                println!("{}", "⚠️ ERROR: FFmpeg is required for audio conversion but not found. ⚠️".bright_red());
+                println!("{}", "The download will likely fail. Please install FFmpeg and try again.".bright_red());
+            } else if self.start_time.is_some() || self.end_time.is_some() {
+                println!("{}", "⚠️ ERROR: FFmpeg is required for time-based extraction but not found. ⚠️".bright_red());
+                println!("{}", "The download will likely fail. Please install FFmpeg and try again.".bright_red());
+            } else {
+                println!("{}", "⚠️ Warning: FFmpeg not found. Some features may not work correctly. ⚠️".yellow());
+            }
+        }
+    
+        command.arg("--concurrent-fragments").arg("4");
+        
+        let aria2c_available = std::process::Command::new("aria2c")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        
+        if aria2c_available {
+            command.arg("--downloader").arg("aria2c");
+            command.arg("--downloader-args").arg("aria2c:-x4");
+            command.arg("--downloader-args").arg("aria2c:-k1M");
+        } else {
+            command.arg("--downloader").arg("yt-dlp");
+        }
+        
+        if self.force_download {
+            command.arg("--no-continue");
+            command.arg("--no-part-file");
+        }
+        
+        if self.format == "mp3" {
+            command
+                .arg("-f")
+                .arg("bestaudio[ext=m4a]")
+                .arg("--extract-audio")
+                .arg("--audio-format")
+                .arg("mp3");
+    
+            command.arg("--audio-quality").arg("7");
+            command
+                .arg("--postprocessor-args")
+                .arg(format!("ffmpeg:-b:a {}", FREE_MP3_BITRATE));
+    
+            println!("{}", "⭐ Limited to 128kbps audio. Upgrade to Pro for studio-quality audio. ⭐".yellow());
+        } else if let Some(quality_value) = &self.quality {
+            println!("{}: {}", "Selected video quality".blue(), quality_value);
+    
+            let format_string = match quality_value.as_str() {
+                "480" => "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+                "720" => "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "1080" => "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                "2160" => "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
+                _ => "best",
+            };
+    
+            command.arg("-f").arg(format_string);
+            command.arg("--verbose");
+        }
+        
+        command.arg("-o").arg(&self.output_path);
+        
+        if self.use_playlist {
+            command.arg("--yes-playlist");
+            println!("{}", "Playlist mode enabled - will download all videos in playlist".yellow());
+        } else {
+            command.arg("--no-playlist");
+        }
+        
+        if self.download_subtitles {
+            command.arg("--write-subs").arg("--sub-langs").arg("all");
+            println!("{}", "Subtitles will be downloaded if available".blue());
+        }
+        
+        if self.start_time.is_some() || self.end_time.is_some() {
+            let mut time_args = String::new();
+    
+            if let Some(start) = &self.start_time {
+                time_args.push_str(&format!("-ss {} ", start));
+            }
+    
+            if let Some(end) = &self.end_time {
+                time_args.push_str(&format!("-to {} ", end));
+            }
+    
+            if !time_args.is_empty() {
+                command
+                    .arg("--postprocessor-args")
+                    .arg(format!("ffmpeg:{}", time_args.trim()));
+            }
+        }
+        
+        command.arg("--socket-timeout").arg("30");
+        command.arg("--retries").arg("10");
+        command.arg("--fragment-retries").arg("10");
+        command.arg("--throttled-rate").arg("100K");
+        command.arg("--newline");
+        command
+            .arg("--progress-template")
+            .arg("download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s");
+        command.arg("--user-agent")
+            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        
+        command.arg(self.url);
+        
+        command
+    }
 }
 
 fn extract_video_id(url: &str) -> Option<String> {
@@ -495,41 +624,30 @@ fn sanitize_filename(filename: &str) -> Result<String, AppError> {
         .collect();
 
     if sanitized.is_empty() || sanitized.len() < filename.len() / 2 {
-        Err(AppError::ValidationError(
-            "Invalid filename after sanitization".to_string(),
-        ))
+        Err(AppError::ValidationError("Invalid filename after sanitization".to_string()))
     } else {
         Ok(sanitized)
     }
 }
 
 fn clear_partial_downloads(url: &str) -> Result<(), AppError> {
-    println!(
-        "{}",
-        "Clearing partial downloads to avoid resumption errors...".blue()
-    );
+    println!("{}", "Clearing partial downloads to avoid resumption errors...".blue());
 
     let video_id = match extract_video_id(url) {
         Some(id) => sanitize_filename(&id)?,
         None => {
-            println!(
-                "{}",
-                "Could not extract video ID, skipping partial download cleanup.".yellow()
-            );
+            println!("{}", "Could not extract video ID, skipping partial download cleanup.".yellow());
             return Ok(());
         }
     };
 
     if video_id.len() < 8 || video_id.len() > 12 {
-        println!(
-            "{}",
-            "Extracted video ID has suspicious length, skipping cleanup.".yellow()
-        );
+        println!("{}", "Extracted video ID has suspicious length, skipping cleanup.".yellow());
         return Ok(());
     }
 
     let mut download_dirs = Vec::new();
-
+    
     if let Some(mut home_path) = dirs::home_dir() {
         home_path.push("Downloads");
         home_path.push("rustloader");
@@ -544,32 +662,15 @@ fn clear_partial_downloads(url: &str) -> Result<(), AppError> {
         download_dirs.push(audio_path);
     }
 
-    if let Some(mut temp_path) = dirs::cache_dir() {
-        temp_path.push("rustloader");
-        download_dirs.push(temp_path);
-    }
-
     download_dirs.push(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    println!(
-        "{} {}",
-        "Looking for partial downloads with ID:".blue(),
-        video_id
-    );
-
     let mut total_removed = 0;
-
     for dir in download_dirs {
         if dir.exists() {
             match safe_cleanup(&dir, &video_id) {
                 Ok(count) => {
                     if count > 0 {
-                        println!(
-                            "{} {} {}",
-                            "Removed".green(),
-                            count,
-                            format!("partial files from {:?}", dir).green()
-                        );
+                        println!("{} {} {}", "Removed".green(), count, format!("partial files from {:?}", dir).green());
                         total_removed += count;
                     }
                 }
@@ -580,32 +681,8 @@ fn clear_partial_downloads(url: &str) -> Result<(), AppError> {
         }
     }
 
-    let temp_dir = std::env::temp_dir();
-    if temp_dir.exists() {
-        match safe_cleanup(&temp_dir, &video_id) {
-            Ok(count) => {
-                if count > 0 {
-                    println!(
-                        "{} {} {}",
-                        "Removed".green(),
-                        count,
-                        format!("temp files from {:?}", temp_dir).green()
-                    );
-                    total_removed += count;
-                }
-            }
-            Err(e) => {
-                println!("{}: {} {:?}", "Warning".yellow(), e, temp_dir);
-            }
-        }
-    }
-
     if total_removed > 0 {
-        println!(
-            "{} {}",
-            "Total partial downloads removed:".green(),
-            total_removed
-        );
+        println!("{} {}", "Total partial downloads removed:".green(), total_removed);
     } else {
         println!("{}", "No partial downloads found to clean up.".blue());
     }
@@ -615,23 +692,17 @@ fn clear_partial_downloads(url: &str) -> Result<(), AppError> {
 }
 
 fn safe_cleanup(dir: &PathBuf, video_id: &str) -> Result<usize, AppError> {
-    let mut count = 0;
-
     if !crate::security::apply_rate_limit("file_cleanup", 3, std::time::Duration::from_secs(30)) {
-        return Err(AppError::ValidationError(
-            "Too many file operations. Please try again later.".to_string(),
-        ));
+        return Err(AppError::ValidationError("Too many file operations. Please try again later.".to_string()));
     }
 
     crate::security::validate_path_safety(dir)?;
 
-    if !video_id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    if !video_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(AppError::SecurityViolation);
     }
 
+    let mut count = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry_result in entries {
             if let Ok(entry) = entry_result {
@@ -646,50 +717,20 @@ fn safe_cleanup(dir: &PathBuf, video_id: &str) -> Result<usize, AppError> {
                     if let Some(file_name) = path.file_name() {
                         let file_name_str = file_name.to_string_lossy();
 
-                        if file_name_str.contains(video_id)
-                            && (file_name_str.ends_with(".part")
-                                || file_name_str.ends_with(".ytdl"))
-                        {
+                        if file_name_str.contains(video_id) && (file_name_str.ends_with(".part") || file_name_str.ends_with(".ytdl")) {
                             if file_name_str.chars().all(|c| {
-                                c.is_ascii_alphanumeric()
-                                    || c == '-'
-                                    || c == '_'
-                                    || c == '.'
-                                    || c == ' '
+                                c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ' '
                             }) {
-                                if let Ok(metadata) = std::fs::metadata(&path) {
-                                    println!(
-                                        "{} {} ({})",
-                                        "Removing:".yellow(),
-                                        file_name_str,
-                                        humansize::format_size(metadata.len(), humansize::BINARY)
-                                    );
-                                } else {
-                                    println!("{} {}", "Removing:".yellow(), file_name_str);
-                                }
-
                                 match std::fs::remove_file(&path) {
                                     Ok(_) => {
                                         count += 1;
-
-                                        if path.exists() {
-                                            println!(
-                                                "{}: {} still exists",
-                                                "Warning".red(),
-                                                file_name_str
-                                            );
-                                        }
                                     }
                                     Err(e) => {
                                         println!("{}: {}", "Failed to remove file".red(), e);
                                     }
                                 }
                             } else {
-                                println!(
-                                    "{}: {}",
-                                    "Skipping file with suspicious characters".yellow(),
-                                    file_name_str
-                                );
+                                println!("{}: {}", "Skipping file with suspicious characters".yellow(), file_name_str);
                             }
                         }
                     }
@@ -698,39 +739,7 @@ fn safe_cleanup(dir: &PathBuf, video_id: &str) -> Result<usize, AppError> {
         }
     }
 
-    println!(
-        "{} {} {}",
-        "Cleaned up".green(),
-        count,
-        "partial download files".green()
-    );
-
     Ok(count)
-}
-
-fn limit_video_quality(requested_quality: &str) -> &str {
-    requested_quality
-}
-
-fn modify_audio_command(command: &mut AsyncCommand, bitrate: Option<&String>) {
-    if let Some(rate) = bitrate {
-        println!(
-            "{} {} {}",
-            "Requested audio bitrate:".yellow(),
-            rate,
-            "(Limited to 128K in free version)".yellow()
-        );
-    }
-
-    command.arg("--audio-quality").arg("7");
-    command
-        .arg("--postprocessor-args")
-        .arg(format!("ffmpeg:-b:a {}", FREE_MP3_BITRATE));
-
-    println!(
-        "{}",
-        "⭐ Limited to 128kbps audio. Upgrade to Pro for studio-quality audio. ⭐".yellow()
-    );
 }
 
 async fn get_video_title(url: &str) -> Result<String, AppError> {
@@ -744,16 +753,12 @@ async fn get_video_title(url: &str) -> Result<String, AppError> {
     let output = command.output().await.map_err(|e| AppError::IoError(e))?;
 
     if !output.status.success() {
-        return Err(AppError::DownloadError(
-            "Failed to get video title".to_string(),
-        ));
+        return Err(AppError::DownloadError("Failed to get video title".to_string()));
     }
 
     let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if title.is_empty() {
-        return Err(AppError::DownloadError(
-            "Could not determine video title".to_string(),
-        ));
+        return Err(AppError::DownloadError("Could not determine video title".to_string()));
     }
 
     Ok(title)
@@ -762,24 +767,24 @@ async fn get_video_title(url: &str) -> Result<String, AppError> {
 fn check_if_video_exists(download_dir: &Path, format: &str, video_title: &str) -> Option<PathBuf> {
     let safe_title = regex::escape(video_title);
     let file_pattern = format!("{}.*\\.{}", safe_title, format);
-    let re = match Regex::new(&file_pattern) {
-        Ok(re) => re,
-        Err(_) => return None,
-    };
-
-    if let Ok(entries) = fs::read_dir(download_dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                if let Some(file_name) = entry.file_name().to_str() {
-                    if re.is_match(file_name) {
-                        return Some(entry.path());
+    
+    match Regex::new(&file_pattern) {
+        Ok(re) => {
+            if let Ok(entries) = fs::read_dir(download_dir) {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        if let Some(file_name) = entry.file_name().to_str() {
+                            if re.is_match(file_name) {
+                                return Some(entry.path());
+                            }
+                        }
                     }
                 }
             }
-        }
+            None
+        },
+        Err(_) => None,
     }
-
-    None
 }
 
 fn prompt_for_redownload() -> Result<bool, AppError> {
@@ -787,33 +792,21 @@ fn prompt_for_redownload() -> Result<bool, AppError> {
     io::stdout().flush().map_err(|e| AppError::IoError(e))?;
 
     let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| AppError::IoError(e))?;
+    io::stdin().read_line(&mut input).map_err(|e| AppError::IoError(e))?;
 
     let input = input.trim().to_lowercase();
     Ok(input == "y" || input == "yes")
 }
 
-fn format_output_path_with_timestamp<P: AsRef<Path>>(
-    download_dir: P,
-    format: &str,
-    timestamp: &str,
-) -> Result<String, AppError> {
+fn format_output_path_with_timestamp<P: AsRef<Path>>(download_dir: P, format: &str, timestamp: &str) -> Result<String, AppError> {
     validate_path_safety(download_dir.as_ref())?;
 
     match format {
         "mp3" | "mp4" | "webm" | "m4a" | "flac" | "wav" | "ogg" => {}
-        _ => {
-            return Err(AppError::ValidationError(format!(
-                "Invalid output format: {}",
-                format
-            )))
-        }
+        _ => return Err(AppError::ValidationError(format!("Invalid output format: {}", format)))
     }
 
     let filename_template = format!("%(title)s_duplicate_{}.{}", timestamp, format);
-
     let path_buf = download_dir.as_ref().join(&filename_template);
 
     let path_str = path_buf
@@ -824,8 +817,6 @@ fn format_output_path_with_timestamp<P: AsRef<Path>>(
     Ok(path_str)
 }
 
-/// Download a video or audio file from the specified URL
-/// Updated to remove quality restrictions and handle duplicate downloads
 pub async fn download_video_free(
     url: &str,
     quality: Option<&str>,
@@ -839,91 +830,7 @@ pub async fn download_video_free(
     bitrate: Option<&String>,
 ) -> Result<(), AppError> {
     validate_url(url)?;
-
-    let mut counter = DownloadCounter::load_from_disk()?;
-    if !force_download && !counter.can_download() {
-        println!(
-            "{}",
-            "⚠️ Daily download limit reached for free version ⚠️".bright_red()
-        );
-        println!(
-            "{}",
-            "🚀 Upgrade to Rustloader Pro for unlimited downloads: rustloader.com/pro 🚀"
-                .bright_yellow()
-        );
-        return Err(AppError::DailyLimitExceeded);
-    }
-
-    println!(
-        "{} {}",
-        "Downloads remaining today:".blue(),
-        counter.remaining_downloads().to_string().green()
-    );
-
-    println!("{}: {}", "Download URL".blue(), url);
-
-    println!("{}", "Fetching video information...".blue());
-
-    let mut should_use_unique_filename = false;
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-
-    let folder_type = if format == "mp3" { "audio" } else { "videos" };
-    let download_dir =
-        initialize_download_dir(output_dir.map(|s| s.as_str()), "rustloader", folder_type)?;
-
-    if !force_download {
-        if !use_playlist {
-            match get_video_title(url).await {
-                Ok(video_title) => {
-                    if let Some(existing_file) =
-                        check_if_video_exists(&download_dir, format, &video_title)
-                    {
-                        println!(
-                            "{}: {:?}",
-                            "Found existing download".yellow(),
-                            existing_file
-                        );
-
-                        if !prompt_for_redownload()? {
-                            println!("{}", "Download cancelled.".green());
-                            return Ok(());
-                        }
-
-                        should_use_unique_filename = true;
-                        println!(
-                            "{}: Will append timestamp to filename",
-                            "Duplicate download".blue()
-                        );
-                    }
-                }
-                Err(e) => {
-                    println!("{}: {}", "Warning: Could not get video title".yellow(), e);
-                    println!(
-                        "{}",
-                        "Proceeding with download without duplicate check...".yellow()
-                    );
-                }
-            }
-        }
-    }
-
-    if force_download {
-        println!(
-            "{}",
-            "Force download mode enabled - clearing partial downloads".blue()
-        );
-        if let Err(e) = clear_partial_downloads(url) {
-            println!(
-                "{}",
-                format!(
-                    "Warning: Could not clear partial downloads: {}. Continuing anyway.",
-                    e
-                )
-                .yellow()
-            );
-        }
-    }
-
+    
     if let Some(start) = start_time {
         validate_time_format(start)?;
     }
@@ -934,12 +841,53 @@ pub async fn download_video_free(
 
     if let Some(rate) = bitrate {
         validate_bitrate(rate)?;
-        if format != "mp3" {
-            println!("{}: {}", "Video bitrate".blue(), rate);
+    }
+
+    let mut counter = DownloadCounter::load_from_disk()?;
+    if !force_download && !counter.can_download() {
+        println!("{}", "⚠️ Daily download limit reached for free version ⚠️".bright_red());
+        println!("{}", "🚀 Upgrade to Rustloader Pro for unlimited downloads: rustloader.com/pro 🚀".bright_yellow());
+        return Err(AppError::DailyLimitExceeded);
+    }
+
+    println!("{} {}", "Downloads remaining today:".blue(), counter.remaining_downloads().to_string().green());
+    println!("{}: {}", "Download URL".blue(), url);
+    println!("{}", "Fetching video information...".blue());
+
+    let folder_type = if format == "mp3" { "audio" } else { "videos" };
+    let download_dir = initialize_download_dir(output_dir.map(|s| s.as_str()), "rustloader", folder_type)?;
+    
+    let mut should_use_unique_filename = false;
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+    if !force_download && !use_playlist {
+        match get_video_title(url).await {
+            Ok(video_title) => {
+                if let Some(existing_file) = check_if_video_exists(&download_dir, format, &video_title) {
+                    println!("{}: {:?}", "Found existing download".yellow(), existing_file);
+
+                    if !prompt_for_redownload()? {
+                        println!("{}", "Download cancelled.".green());
+                        return Ok(());
+                    }
+
+                    should_use_unique_filename = true;
+                    println!("{}: Will append timestamp to filename", "Duplicate download".blue());
+                }
+            }
+            Err(e) => {
+                println!("{}: {}", "Warning: Could not get video title".yellow(), e);
+                println!("{}", "Proceeding with download without duplicate check...".yellow());
+            }
         }
     }
 
-    let _limited_quality = quality.map(limit_video_quality);
+    if force_download {
+        println!("{}", "Force download mode enabled - clearing partial downloads".blue());
+        if let Err(e) = clear_partial_downloads(url) {
+            println!("{}", format!("Warning: Could not clear partial downloads: {}. Continuing anyway.", e).yellow());
+        }
+    }
 
     let output_path = if should_use_unique_filename {
         format_output_path_with_timestamp(&download_dir, format, &timestamp)?
@@ -948,7 +896,6 @@ pub async fn download_video_free(
     };
 
     let progress = Arc::new(DownloadProgress::new());
-
     let pb = Arc::new(ProgressBar::new(100));
     pb.set_style(
         ProgressStyle::default_bar()
@@ -957,160 +904,26 @@ pub async fn download_video_free(
             .progress_chars("#>-"),
     );
 
-    pb.set_message(format!(
-        "Size: {} | Speed: {} | ETA: {}",
-        "Calculating...", "Connecting...", "Calculating..."
-    ));
+    pb.set_message(format!("Size: {} | Speed: {} | ETA: {}", "Calculating...", "Connecting...", "Calculating..."));
 
-    display_download_promo();
-
-    let mut command = AsyncCommand::new("yt-dlp");
-
-    enable_parallel_download(&mut command);
-
-    if force_download {
-        command.arg("--no-continue");
-        command.arg("--no-part-file");
-    }
-
-    // Replace the original "Add format selection based on requested format and quality" block with the following
-    // Add format selection based on requested format and quality
-    if format == "mp3" && !is_ffmpeg_available() {
-        // Code for mp3 format remains unchanged
-        let ffmpeg_available = match std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-        {
-            Ok(_) => true,
-            Err(_) => {
-                println!(
-                    "{}",
-                    "⚠️ Warning: FFmpeg not found but required for audio conversion. ⚠️"
-                        .bright_red()
-                );
-                println!(
-                    "{}",
-                    "Will attempt to continue, but audio extraction may fail.".bright_red()
-                );
-                false
-            }
-        };
-
-        command
-            .arg("-f")
-            .arg("bestaudio[ext=m4a]")
-            .arg("--extract-audio")
-            .arg("--audio-format")
-            .arg("mp3");
-
-        modify_audio_command(&mut command, bitrate);
-
-        if !ffmpeg_available {
-            println!(
-                "{}",
-                "🔴 Attempting audio extraction without verified FFmpeg - this may fail"
-                    .bright_red()
-            );
-        }
-    } else {
-        // For video formats, explicitly enforce the requested quality
-        if let Some(quality_value) = quality {
-            println!("{}: {}", "Selected video quality".blue(), quality_value);
-
-            // Map quality settings explicitly
-            let format_string = match quality_value {
-                "480" => "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-                "720" => "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-                "1080" => "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-                "2160" => "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
-                _ => "best",
-            };
-
-            command.arg("-f").arg(format_string);
-
-            command.arg("--verbose");
-        }
-    }
+    let promo = DownloadPromo::new();
+    println!("\n{}\n", promo.get_random_download_message().bright_yellow());
 
     println!("{}: {}", "Video quality".blue(), quality.unwrap_or("auto"));
-    let command_str = format!("{:?}", command);
-    println!("{}: {}", "Debug command".yellow(), command_str);
-    // End of replaced section
-
-    command.arg("-o").arg(&output_path);
-
-    if use_playlist {
-        command.arg("--yes-playlist");
-        println!(
-            "{}",
-            "Playlist mode enabled - will download all videos in playlist".yellow()
-        );
-    } else {
-        command.arg("--no-playlist");
-    }
-
-    if download_subtitles {
-        command.arg("--write-subs").arg("--sub-langs").arg("all");
-        println!("{}", "Subtitles will be downloaded if available".blue());
-    }
-
-    if start_time.is_some() || end_time.is_some() {
-        let ffmpeg_available = match std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-        {
-            Ok(_) => true,
-            Err(_) => false,
-        };
-
-        if !ffmpeg_available {
-            println!(
-                "{}",
-                "⚠️ Warning: FFmpeg not found. Time-based extraction might not work. ⚠️".yellow()
-            );
-            println!(
-                "{}",
-                "Will attempt to continue, but the operation may fail.".yellow()
-            );
-        }
-
-        let mut time_args = String::new();
-
-        if let Some(start) = start_time {
-            validate_time_format(start)?;
-            time_args.push_str(&format!("-ss {} ", start));
-        }
-
-        if let Some(end) = end_time {
-            validate_time_format(end)?;
-            time_args.push_str(&format!("-to {} ", end));
-        }
-
-        if !time_args.is_empty() {
-            command
-                .arg("--postprocessor-args")
-                .arg(format!("ffmpeg:{}", time_args.trim()));
-        }
-    }
-
-    command.arg("--socket-timeout").arg("30");
-    command.arg("--retries").arg("10");
-    command.arg("--fragment-retries").arg("10");
-    command.arg("--throttled-rate").arg("100K");
-    command.arg("--newline");
-    command
-        .arg("--progress-template")
-        .arg("download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s");
-    command.arg("--user-agent")
-        .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-    command.arg(url);
+    
+    let command = YtdlpCommandBuilder::new(url, &output_path)
+        .with_format(format)
+        .with_quality(quality)
+        .with_time_range(start_time, end_time)
+        .with_playlist(use_playlist)
+        .with_subtitles(download_subtitles)
+        .with_force_download(force_download)
+        .with_bitrate(bitrate)
+        .build();
 
     println!("{}", "Starting download...".green());
 
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = match command.spawn() {
+    let mut child = match command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
         Err(e) => {
             match e.kind() {
@@ -1123,14 +936,7 @@ pub async fn download_video_free(
                     return Err(AppError::IoError(e));
                 }
                 _ => {
-                    eprintln!(
-                        "{}",
-                        format!(
-                            "Failed to execute yt-dlp command: {}. Check your network connection.",
-                            e
-                        )
-                        .red()
-                    );
+                    eprintln!("{}", format!("Failed to execute yt-dlp command: {}. Check your network connection.", e).red());
                     return Err(AppError::IoError(e));
                 }
             }
@@ -1180,13 +986,8 @@ pub async fn download_video_free(
 
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                if line.contains("HTTP Error 416")
-                    || line.contains("Requested Range Not Satisfiable")
-                {
-                    eprintln!(
-                        "{}",
-                        "Error: File already exists or download was previously completed.".red()
-                    );
+                if line.contains("HTTP Error 416") || line.contains("Requested Range Not Satisfiable") {
+                    eprintln!("{}", "Error: File already exists or download was previously completed.".red());
                 } else {
                     eprintln!("{}", line.red());
                 }
@@ -1207,14 +1008,7 @@ pub async fn download_video_free(
                     return Err(AppError::IoError(e));
                 }
                 _ => {
-                    eprintln!(
-                        "{}",
-                        format!(
-                            "Failed to complete download: {}. Check your network connection.",
-                            e
-                        )
-                        .red()
-                    );
+                    eprintln!("{}", format!("Failed to complete download: {}. Check your network connection.", e).red());
                     return Err(AppError::IoError(e));
                 }
             }
@@ -1226,7 +1020,7 @@ pub async fn download_video_free(
     if !status.success() {
         let exit_code = status.code().unwrap_or(0);
 
-        if exit_code == 1 && format == "mp3" && !is_ffmpeg_available() {
+        if exit_code == 1 && format == "mp3" && !*FFMPEG_AVAILABLE {
             return Err(AppError::DownloadError(
                 "Download failed, likely due to missing or incompatible ffmpeg. Please install ffmpeg and try again.".to_string(),
             ));
@@ -1245,26 +1039,13 @@ pub async fn download_video_free(
         counter.increment()?;
     }
 
-    let notification_result = Notification::new()
+    let _ = Notification::new()
         .summary("Download Complete")
-        .body(&format!(
-            "{} file downloaded successfully.",
-            format.to_uppercase()
-        ))
+        .body(&format!("{} file downloaded successfully.", format.to_uppercase()))
         .show();
 
-    if let Err(e) = notification_result {
-        println!("{}: {}", "Failed to show notification".yellow(), e);
-    }
-
-    println!(
-        "{} {} {}",
-        "Download completed successfully.".green(),
-        format.to_uppercase(),
-        "file saved.".green()
-    );
-
-    display_completion_promo();
+    println!("{} {} {}", "Download completed successfully.".green(), format.to_uppercase(), "file saved.".green());
+    println!("\n{}\n", promo.get_random_completion_message().bright_yellow());
 
     Ok(())
 }
