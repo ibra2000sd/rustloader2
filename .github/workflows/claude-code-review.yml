@@ -55,19 +55,12 @@ jobs:
           cargo install cargo-audit
           cargo audit --json > audit-results.json || echo "Cargo audit found security issues, continuing workflow"
       
-      - name: Copy Python script
-        run: |
-          cat > analyze_code.py << 'EOL'
-          # Paste the Python script here
-          EOL
-          chmod +x analyze_code.py
-      
       - name: Analyze code with Claude
         id: claude-analysis
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          python analyze_code.py
+          python analyze_code.py > analyze_output.txt
           if grep -q "fixes_available=true" analyze_output.txt; then
             echo "fixes_available=true" >> $GITHUB_OUTPUT
           else
