@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Rustloader Installation Script
-# This script installs rustloader and all its dependencies
+# Improved Rustloader Installation Script
+# This script provides a more robust installation process with better error handling,
+# dependency validation, and user feedback
 
 set -e  # Exit on error
 
@@ -10,15 +11,92 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}    Rustloader Installation Script      ${NC}"
-echo -e "${BLUE}========================================${NC}"
+# Banner
+echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  ${CYAN}Rustloader Installation Script v1.1.0${BLUE}  ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+
+# Function to print steps
+print_step() {
+    echo -e "\n${BLUE}[${CYAN}+${BLUE}] ${CYAN}$1${NC}"
+}
+
+# Function to print success messages
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+# Function to print info messages
+print_info() {
+    echo -e "${BLUE}ℹ $1${NC}"
+}
+
+# Function to print warnings
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+# Function to print errors
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+# Function to handle script interruption
+handle_interrupt() {
+    echo -e "\n${YELLOW}⚠ Installation interrupted. Cleaning up...${NC}"
+    if [ -d "$TMP_DIR" ]; then
+        rm -rf "$TMP_DIR"
+        echo -e "${GREEN}✓ Removed temporary files${NC}"
+    fi
+    echo -e "${YELLOW}⚠ Installation was not completed. Run the script again to start over.${NC}"
+    exit 1
+}
+
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to print spinner
+function spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while ps -p $pid > /dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+# Set up trap for interruptions
+trap handle_interrupt INT TERM
+
+# Create a temporary directory for downloads
+TMP_DIR=$(mktemp -d)
+print_info "Created temporary directory: $TMP_DIR"
 
 # Detect OS
+print_step "Detecting Operating System"
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     OS="Linux"
+    DISTRO="Unknown"
+    
+    # Detect distribution
+    if command_exists apt || command_exists apt-get; then
+        DISTRO="Debian"
+    elif command_exists dnf; then
+        DISTRO="Fedora"
+    elif command_exists pacman; then
+        DISTRO="Arch"
+    fi
+    
 elif [[ "$OSTYPE" == "darwin"* ]]; then
     OS="macOS"
 elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
@@ -27,423 +105,370 @@ else
     OS="Unknown"
 fi
 
-echo -e "${GREEN}Detected operating system: ${OS}${NC}"
+print_success "Detected $OS operating system $([ "$DISTRO" != "Unknown" ] && echo "($DISTRO)")"
 
 # Check if running with sudo/root on Linux
 if [[ "$OS" == "Linux" ]] && [[ $EUID -ne 0 ]]; then
-    echo -e "${YELLOW}Warning: This script may need sudo privileges to install dependencies.${NC}"
-    echo -e "${YELLOW}If it fails, please run it again with sudo.${NC}"
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${RED}Installation cancelled.${NC}"
+    print_warning "Some operations might require sudo privileges."
+    print_warning "If permission errors occur, consider running this script with sudo."
+    echo -e "${YELLOW}Continue anyway? (y/n)${NC}"
+    read -r cont
+    if [[ ! $cont =~ ^[Yy]$ ]]; then
+        print_error "Installation cancelled."
         exit 1
     fi
 fi
 
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Function to handle interrupted installations
-cleanup_interrupted_install() {
-    echo -e "${YELLOW}Cleaning up interrupted installation...${NC}"
-    
-    # Remove partial downloads
-    if [ -d "$TMP_DIR" ]; then
-        rm -rf "$TMP_DIR"
-        echo -e "${GREEN}Removed temporary files${NC}"
+# Check for existing installations
+print_step "Checking for existing Rustloader installation"
+if command_exists rustloader; then
+    EXISTING_VERSION=$(rustloader --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "Unknown")
+    if [ "$EXISTING_VERSION" != "Unknown" ]; then
+        print_warning "Rustloader version $EXISTING_VERSION is already installed."
+        echo -e "${YELLOW}Do you want to continue with the installation? This may update the existing installation. (y/n)${NC}"
+        read -r cont
+        if [[ ! $cont =~ ^[Yy]$ ]]; then
+            print_info "Installation cancelled. Using existing installation."
+            exit 0
+        fi
     fi
-    
-    # Check for and remove partial binary installation
-    if [ -f "$HOME/.cargo/bin/rustloader.partial" ]; then
-        rm -f "$HOME/.cargo/bin/rustloader.partial"
-        echo -e "${GREEN}Removed partial binary installation${NC}"
-    fi
-    
-    echo -e "${GREEN}Cleanup complete. Please restart the installation.${NC}"
-    exit 1
-}
-
-# Add trap to handle interruptions
-trap cleanup_interrupted_install INT TERM
+else
+    print_info "No existing Rustloader installation found."
+fi
 
 # Install Rust if not installed
-install_rust() {
-    if ! command_exists cargo; then
-        echo -e "${YELLOW}Rust is not installed. Installing Rust...${NC}"
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+print_step "Checking for Rust installation"
+if ! command_exists cargo; then
+    print_info "Rust is not installed. Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$TMP_DIR/rustup-init.sh"
+    
+    # Verify the downloaded script (basic check)
+    if grep -q "curl https://sh.rustup.rs -sSf | sh" "$TMP_DIR/rustup-init.sh"; then
+        chmod +x "$TMP_DIR/rustup-init.sh"
+        "$TMP_DIR/rustup-init.sh" -y
         source "$HOME/.cargo/env"
-        echo -e "${GREEN}Rust installed successfully.${NC}"
+        print_success "Rust installed successfully."
     else
-        echo -e "${GREEN}Rust is already installed.${NC}"
+        print_error "Downloaded Rust installer validation failed. Installation aborted."
+        exit 1
     fi
-}
+else
+    RUST_VERSION=$(rustc --version | cut -d ' ' -f 2)
+    print_success "Rust is already installed (version $RUST_VERSION)."
+    
+    # Check if rustup is available and update Rust
+    if command_exists rustup; then
+        print_info "Updating Rust using rustup..."
+        rustup update &
+        spinner $!
+        print_success "Rust updated successfully."
+    fi
+fi
 
-# Install dependencies based on OS
+# Function to install and validate dependencies
 install_dependencies() {
-    echo -e "${BLUE}Installing dependencies...${NC}"
-    
-    case $OS in
-        "Linux")
-            # Show more detailed guidance based on distribution
-            if command_exists apt; then
-                echo -e "${YELLOW}Detected Debian/Ubuntu-based system${NC}"
-                echo -e "${YELLOW}Installing dependencies using apt...${NC}"
-                sudo apt update
-                sudo apt install -y python3 python3-pip ffmpeg libssl-dev pkg-config
-                echo -e "${GREEN}Dependencies installed. If you encounter any issues, consider running:${NC}"
-                echo -e "${GREEN}sudo apt install python3-venv build-essential${NC}"
-            elif command_exists dnf; then
-                echo -e "${YELLOW}Detected Fedora/RHEL-based system${NC}"
-                echo -e "${YELLOW}Installing dependencies using dnf...${NC}"
-                sudo dnf install -y python3 python3-pip ffmpeg openssl-devel pkgconfig
-                echo -e "${GREEN}Dependencies installed. If you encounter any issues, consider running:${NC}"
-                echo -e "${GREEN}sudo dnf groupinstall 'Development Tools'${NC}"
-            elif command_exists pacman; then
-                echo -e "${YELLOW}Detected Arch-based system${NC}"
-                echo -e "${YELLOW}Installing dependencies using pacman...${NC}"
-                sudo pacman -Sy python python-pip ffmpeg openssl pkg-config
-                echo -e "${GREEN}Dependencies installed. If you encounter any issues, consider running:${NC}"
-                echo -e "${GREEN}sudo pacman -S base-devel${NC}"
+    print_step "Installing and validating dependencies"
+
+    # Function to check dependency version
+    check_dependency_version() {
+        local dep_name=$1
+        local min_version=$2
+        local version_cmd=$3
+        local version_regex=$4
+        
+        if command_exists "$dep_name"; then
+            local version_output
+            version_output=$($version_cmd 2>&1)
+            local version
+            version=$(echo "$version_output" | grep -oE "$version_regex" | head -n 1)
+            
+            if [ -n "$version" ]; then
+                print_success "$dep_name found (version $version)"
+                return 0
             else
-                echo -e "${RED}Unsupported Linux distribution.${NC}"
-                echo -e "${YELLOW}Please install these packages manually:${NC}"
-                echo -e "${YELLOW}- python3 and pip (package manager varies by distribution)${NC}"
-                echo -e "${YELLOW}- ffmpeg (package manager varies by distribution)${NC}"
-                echo -e "${YELLOW}- openssl-dev or libssl-dev (package manager varies by distribution)${NC}"
-                echo -e "${YELLOW}- pkg-config (package manager varies by distribution)${NC}"
-                echo -e "${YELLOW}After installing dependencies, run:${NC}"
-                echo -e "${YELLOW}pip3 install --user --upgrade yt-dlp${NC}"
-                exit 1
+                print_warning "Could not determine $dep_name version."
+                return 1
             fi
-            
-            # Provide guidance for common Linux issues
-            echo -e "${BLUE}===============================================${NC}"
-            echo -e "${BLUE}Linux-specific troubleshooting tips:${NC}"
-            echo -e "${YELLOW}1. If 'command not found' errors occur after installation:${NC}"
-            echo -e "   Run: ${GREEN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
-            echo -e "${YELLOW}2. If permission errors occur:${NC}"
-            echo -e "   Run: ${GREEN}chmod +x \$HOME/.local/bin/yt-dlp${NC}"
-            echo -e "${YELLOW}3. For SSL certificate errors:${NC}"
-            echo -e "   Run: ${GREEN}pip install --upgrade certifi${NC}"
-            echo -e "${BLUE}===============================================${NC}"
-            
-            # Install yt-dlp
-            pip3 install --user --upgrade yt-dlp
-            ;;
-            
-        "macOS")
-            if ! command_exists brew; then
-                echo -e "${YELLOW}Homebrew not found. Installing Homebrew...${NC}"
-                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            fi
-            
-            echo -e "${YELLOW}Installing dependencies with Homebrew...${NC}"
-            brew install python ffmpeg yt-dlp openssl@3 pkg-config
-            
-            # Set up environment for OpenSSL
-            export OPENSSL_DIR=$(brew --prefix openssl@3)
-            echo "export OPENSSL_DIR=$(brew --prefix openssl@3)" >> ~/.bash_profile
-            echo "export OPENSSL_DIR=$(brew --prefix openssl@3)" >> ~/.zshrc
-            
-            # macOS-specific troubleshooting tips
-            echo -e "${BLUE}===============================================${NC}"
-            echo -e "${BLUE}macOS-specific troubleshooting tips:${NC}"
-            echo -e "${YELLOW}1. If you encounter permission issues:${NC}"
-            echo -e "   Run: ${GREEN}sudo chown -R $(whoami) /usr/local/share/zsh /usr/local/share/zsh/site-functions${NC}"
-            echo -e "${YELLOW}2. If brew commands fail:${NC}"
-            echo -e "   Run: ${GREEN}brew doctor${NC}"
-            echo -e "${YELLOW}3. If OpenSSL is not found during build:${NC}"
-            echo -e "   Run: ${GREEN}export OPENSSL_DIR=\$(brew --prefix openssl@3)${NC}"
-            echo -e "${BLUE}===============================================${NC}"
-            ;;
-            
-        "Windows")
-            echo -e "${YELLOW}Windows detected. This script has limited support for Windows.${NC}"
-            
-            if ! command_exists choco; then
-                echo -e "${RED}Chocolatey not found. Please install it first: https://chocolatey.org/install${NC}"
-                echo -e "${YELLOW}Or install Python, ffmpeg, and yt-dlp manually.${NC}"
-                
-                # Windows-specific manual installation instructions
-                echo -e "${BLUE}===============================================${NC}"
-                echo -e "${BLUE}Windows manual installation steps:${NC}"
-                echo -e "${YELLOW}1. Install Python from: https://www.python.org/downloads/${NC}"
-                echo -e "${YELLOW}2. Install ffmpeg from: https://www.gyan.dev/ffmpeg/builds/${NC}"
-                echo -e "${YELLOW}3. Install yt-dlp with: pip install --user --upgrade yt-dlp${NC}"
-                echo -e "${YELLOW}4. Add Python and ffmpeg to your PATH${NC}"
-                echo -e "${BLUE}===============================================${NC}"
-                exit 1
-            fi
-            
-            echo -e "${YELLOW}Installing dependencies with Chocolatey...${NC}"
-            choco install -y python ffmpeg openssl
-            
-            # Install yt-dlp with pip
-            echo -e "${YELLOW}Installing yt-dlp...${NC}"
-            pip install --user --upgrade yt-dlp
-            
-            # Windows-specific troubleshooting tips
-            echo -e "${BLUE}===============================================${NC}"
-            echo -e "${BLUE}Windows-specific troubleshooting tips:${NC}"
-            echo -e "${YELLOW}1. If 'command not found' errors occur:${NC}"
-            echo -e "   Ensure Python Scripts folder is in your PATH:"
-            echo -e "   ${GREEN}%UserProfile%\\AppData\\Local\\Programs\\Python\\Python3X\\Scripts${NC}"
-            echo -e "${YELLOW}2. If ffmpeg is not found:${NC}"
-            echo -e "   Verify ffmpeg is in your PATH or manually install to:"
-            echo -e "   ${GREEN}C:\\ffmpeg\\bin${NC}"
-            echo -e "${YELLOW}3. To restart your PATH without restarting:${NC}"
-            echo -e "   Open a new PowerShell/CMD window"
-            echo -e "${BLUE}===============================================${NC}"
-            ;;
-            
-        *)
-            echo -e "${RED}Unsupported operating system: $OS${NC}"
-            echo -e "${YELLOW}Please install Python, ffmpeg, and yt-dlp manually.${NC}"
-            exit 1
-            ;;
-    esac
-    
-    echo -e "${GREEN}Dependencies installed successfully.${NC}"
-}
+        else
+            print_warning "$dep_name not found."
+            return 1
+        fi
+    }
 
-# Verify dependencies
-verify_dependencies() {
-    echo -e "${BLUE}Verifying dependencies...${NC}"
-    
-    local missing=0
-    
-    if ! command_exists yt-dlp; then
-        echo -e "${RED}yt-dlp not found in PATH${NC}"
-        missing=1
-    else
-        echo -e "${GREEN}yt-dlp is installed: $(yt-dlp --version 2>&1 | head -n 1)${NC}"
-    fi
-    
-    if ! command_exists ffmpeg; then
-        echo -e "${RED}ffmpeg not found in PATH${NC}"
-        missing=1
-    else
-        echo -e "${GREEN}ffmpeg is installed: $(ffmpeg -version 2>&1 | head -n 1)${NC}"
-    fi
-    
-    if [[ $missing -eq 1 ]]; then
-        echo -e "${YELLOW}Some dependencies are missing. Please install them manually and run this script again.${NC}"
-        return 1
-    fi
-    
-    return 0
-}
+    # Install yt-dlp
+    if ! check_dependency_version "yt-dlp" "2023.7.6" "yt-dlp --version" "[0-9]+\.[0-9]+\.[0-9]+" || \
+       [[ "$1" == "force" ]]; then
+        print_info "Installing/updating yt-dlp..."
 
-# Install rustloader
-install_rustloader() {
-    echo -e "${BLUE}Installing rustloader...${NC}"
-    
-    # Create a temporary directory
-    TMP_DIR=$(mktemp -d)
-    echo -e "${YELLOW}Created temporary directory: $TMP_DIR${NC}"
-    
-    # Clone the repository
-    echo -e "${YELLOW}Cloning rustloader repository...${NC}"
-    git clone https://github.com/ibra2000sd/rustloader.git "$TMP_DIR/rustloader"
-    
-    # Build and install
-    echo -e "${YELLOW}Building and installing rustloader...${NC}"
-    cd "$TMP_DIR/rustloader"
-    
-    # First build with partial extension to avoid interruptions leaving broken install
-    cargo build --release --target-dir "$TMP_DIR/rustloader/target"
-    
-    # Check if build was successful
-    if [ -f "$TMP_DIR/rustloader/target/release/rustloader" ]; then
-        # Copy to cargo bin directory
-        cp "$TMP_DIR/rustloader/target/release/rustloader" "$HOME/.cargo/bin/rustloader"
-        echo -e "${GREEN}Rustloader binary installed successfully.${NC}"
-    else
-        echo -e "${RED}Build failed. Please check error messages above.${NC}"
-        cleanup_interrupted_install
-    fi
-    
-    # Clean up
-    echo -e "${YELLOW}Cleaning up...${NC}"
-    cd - > /dev/null
-    rm -rf "$TMP_DIR"
-    
-    echo -e "${GREEN}Rustloader installed successfully.${NC}"
-}
-
-# Add rustloader to PATH if not already there
-setup_path() {
-    echo -e "${BLUE}Setting up PATH...${NC}"
-    
-    # Check if ~/.cargo/bin is in PATH
-    if [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
-        echo -e "${YELLOW}Adding ~/.cargo/bin to PATH...${NC}"
-        
-        # Detect shell
-        SHELL_NAME=$(basename "$SHELL")
-        
-        case $SHELL_NAME in
-            "bash")
-                PROFILE_FILE="$HOME/.bashrc"
+        case $OS in
+            "Linux"|"macOS")
+                # Try to use pip3 first, fall back to pip if needed
+                if command_exists pip3; then
+                    pip3 install --user --upgrade yt-dlp &
+                    spinner $!
+                elif command_exists pip; then
+                    pip install --user --upgrade yt-dlp &
+                    spinner $!
+                else
+                    print_error "Neither pip nor pip3 found. Please install Python pip first."
+                    return 1
+                fi
                 ;;
-            "zsh")
-                PROFILE_FILE="$HOME/.zshrc"
+            "Windows")
+                if command_exists pip; then
+                    pip install --user --upgrade yt-dlp &
+                    spinner $!
+                else
+                    print_error "pip not found. Please install Python pip first."
+                    return 1
+                fi
                 ;;
             *)
-                PROFILE_FILE="$HOME/.profile"
+                print_error "Unsupported operating system: $OS"
+                return 1
                 ;;
         esac
         
-        echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$PROFILE_FILE"
-        echo -e "${GREEN}Added ~/.cargo/bin to PATH in $PROFILE_FILE${NC}"
-        echo -e "${YELLOW}Please run 'source $PROFILE_FILE' or restart your terminal to apply changes.${NC}"
-    else
-        echo -e "${GREEN}~/.cargo/bin is already in PATH.${NC}"
-    fi
-}
-
-# Test installation
-test_installation() {
-    echo -e "${BLUE}Testing rustloader installation...${NC}"
-    
-    if command_exists rustloader; then
-        echo -e "${GREEN}Rustloader is installed and in PATH.${NC}"
-        echo -e "${YELLOW}Rustloader version:${NC}"
-        rustloader --version
-        echo -e "${GREEN}Installation successful!${NC}"
-    else
-        echo -e "${RED}Rustloader is not in PATH. Please restart your terminal or add ~/.cargo/bin to your PATH manually.${NC}"
-        echo -e "${RED}Installation may have failed.${NC}"
-        exit 1
-    fi
-}
-
-# Clean up existing download counter if it exists
-cleanup_existing_data() {
-    echo -e "${BLUE}Checking for existing data...${NC}"
-    
-    # Define paths based on OS
-    local data_dir=""
-    if [[ "$OS" == "Linux" ]]; then
-        data_dir="$HOME/.local/share/rustloader"
-    elif [[ "$OS" == "macOS" ]]; then
-        data_dir="$HOME/Library/Application Support/rustloader"
-    elif [[ "$OS" == "Windows" ]]; then
-        data_dir="$APPDATA/rustloader"
-    fi
-    
-    if [[ -d "$data_dir" ]]; then
-        echo -e "${YELLOW}Found existing rustloader data directory: $data_dir${NC}"
-        read -p "Would you like to clean up old data files? (Recommended for updates) (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo -e "${YELLOW}Removing old data files...${NC}"
-            rm -f "$data_dir/download_counter.dat"
-            echo -e "${GREEN}Old data files removed.${NC}"
+        # Validate installation
+        if command_exists yt-dlp; then
+            YT_DLP_VERSION=$(yt-dlp --version 2>/dev/null || echo "Unknown")
+            print_success "yt-dlp installed/updated successfully (version $YT_DLP_VERSION)."
+        else
+            print_warning "yt-dlp installation may have failed. Please check your PATH."
+            
+            # Try to find the binary location
+            YT_DLP_PATH="$HOME/.local/bin/yt-dlp"
+            if [ -f "$YT_DLP_PATH" ]; then
+                print_info "Found yt-dlp at $YT_DLP_PATH but it's not in your PATH."
+                print_info "Add the following to your .bashrc or .zshrc file:"
+                echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
+            fi
         fi
     fi
+
+    # Install ffmpeg
+    if ! check_dependency_version "ffmpeg" "4.0.0" "ffmpeg -version" "ffmpeg version ([0-9]+\.[0-9]+(?:\.[0-9]+)?)" || \
+       [[ "$1" == "force" ]]; then
+        print_info "Installing/updating ffmpeg..."
+
+        case $OS in
+            "Linux")
+                case $DISTRO in
+                    "Debian")
+                        sudo apt update && sudo apt install -y ffmpeg &
+                        spinner $!
+                        ;;
+                    "Fedora")
+                        sudo dnf install -y ffmpeg &
+                        spinner $!
+                        ;;
+                    "Arch")
+                        sudo pacman -Sy --noconfirm ffmpeg &
+                        spinner $!
+                        ;;
+                    *)
+                        print_warning "Unsupported Linux distribution. Please install ffmpeg manually."
+                        print_info "Try: sudo apt install ffmpeg, sudo dnf install ffmpeg, or equivalent for your distribution."
+                        ;;
+                esac
+                ;;
+            "macOS")
+                if command_exists brew; then
+                    brew install ffmpeg &
+                    spinner $!
+                else
+                    print_warning "Homebrew not found. Installing Homebrew..."
+                    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                    if command_exists brew; then
+                        brew install ffmpeg &
+                        spinner $!
+                    else
+                        print_error "Failed to install Homebrew. Please install ffmpeg manually."
+                        return 1
+                    fi
+                fi
+                ;;
+            "Windows")
+                if command_exists choco; then
+                    choco install ffmpeg -y &
+                    spinner $!
+                else
+                    print_warning "Chocolatey not found. Please install ffmpeg manually."
+                    print_info "Visit: https://ffmpeg.org/download.html"
+                    # Continue installation, ffmpeg is not strictly required
+                fi
+                ;;
+            *)
+                print_error "Unsupported operating system: $OS"
+                return 1
+                ;;
+        esac
+        
+        # Validate installation
+        if command_exists ffmpeg; then
+            FFMPEG_VERSION=$(ffmpeg -version | grep -oE "ffmpeg version ([0-9]+\.[0-9]+(?:\.[0-9]+)?)" | sed 's/ffmpeg version //')
+            print_success "ffmpeg installed/updated successfully (version $FFMPEG_VERSION)."
+        else
+            print_warning "ffmpeg installation may have failed. Continuing without it."
+            print_warning "Some Rustloader features requiring ffmpeg will not work."
+        fi
+    fi
+
+    return 0
 }
 
-# Function for verifying full installation
-function verify_full_installation() {
-    echo -e "${BLUE}Verifying installation...${NC}"
+# Install dependencies
+install_dependencies
+
+# Clone and build Rustloader
+print_step "Downloading and building Rustloader"
+
+# Clone the repository
+print_info "Cloning Rustloader repository..."
+git clone https://github.com/ibra2000sd/rustloader.git "$TMP_DIR/rustloader" &
+spinner $!
+
+if [ ! -d "$TMP_DIR/rustloader" ]; then
+    print_error "Failed to clone Rustloader repository."
+    exit 1
+fi
+
+# Build Rustloader
+print_info "Building Rustloader..."
+cd "$TMP_DIR/rustloader"
+
+# Build with debug output in case of errors
+cargo build --release || {
+    print_error "Build failed. Checking for common issues..."
     
-    local errors=0
-    
-    # Check if rustloader is in PATH
-    if ! command_exists rustloader; then
-        echo -e "${RED}ERROR: rustloader not found in PATH${NC}"
-        echo -e "${YELLOW}Try manually adding it with: export PATH=\"\$HOME/.cargo/bin:\$PATH\"${NC}"
-        errors=$((errors+1))
+    # Check for common issues
+    if ! command_exists cc; then
+        print_error "C compiler not found. Please install build-essential (Linux) or Xcode Command Line Tools (macOS)."
     fi
     
-    # Check if dependencies are accessible
-    if ! command_exists yt-dlp; then
-        echo -e "${RED}ERROR: yt-dlp not found in PATH${NC}"
-        echo -e "${YELLOW}Try installing manually with: pip install --user --upgrade yt-dlp${NC}"
-        errors=$((errors+1))
+    if ! command_exists pkg-config; then
+        print_error "pkg-config not found. Please install it with your package manager."
     fi
     
-    if ! command_exists ffmpeg; then
-        echo -e "${RED}ERROR: ffmpeg not found in PATH${NC}"
-        echo -e "${YELLOW}Please install ffmpeg using your package manager${NC}"
-        errors=$((errors+1))
-    fi
-    
-    if [ $errors -eq 0 ]; then
-        echo -e "${GREEN}All components verified successfully!${NC}"
-    else
-        echo -e "${RED}Found $errors issue(s) with installation.${NC}"
-        echo -e "${YELLOW}Please resolve these issues or run the installation script again.${NC}"
-    fi
+    exit 1
 }
 
-# Display final instructions
-display_instructions() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}Rustloader has been successfully installed!${NC}"
-    echo -e "${GREEN}You can now use it by running 'rustloader' in your terminal.${NC}"
-    echo -e "${YELLOW}Basic Usage:${NC}"
-    echo -e "  rustloader [URL] [OPTIONS]"
-    echo -e "${YELLOW}Examples:${NC}"
-    echo -e "  rustloader https://www.youtube.com/watch?v=dQw4w9WgXcQ                  # Download video"
-    echo -e "  rustloader https://www.youtube.com/watch?v=dQw4w9WgXcQ --format mp3     # Download audio"
-    echo -e "  rustloader https://www.youtube.com/watch?v=dQw4w9WgXcQ --quality 720    # Set quality"
-    echo -e "  rustloader --help                                                        # Show all options"
-    echo -e "${YELLOW}Pro Version:${NC}"
-    echo -e "  rustloader --activate YOUR_LICENSE_KEY                                   # Activate Pro"
-    echo -e "  rustloader --license                                                     # Show license info"
+# Check if build was successful
+if [ ! -f "$TMP_DIR/rustloader/target/release/rustloader" ]; then
+    print_error "Build failed. Please check error messages above."
+    exit 1
+fi
+
+# Install the binary
+print_step "Installing Rustloader binary"
+
+# Create cargo bin directory if it doesn't exist
+mkdir -p "$HOME/.cargo/bin"
+
+# Copy to cargo bin directory
+cp "$TMP_DIR/rustloader/target/release/rustloader" "$HOME/.cargo/bin/rustloader"
+
+# Make executable
+chmod +x "$HOME/.cargo/bin/rustloader"
+
+print_success "Rustloader binary installed successfully at $HOME/.cargo/bin/rustloader"
+
+# Set up PATH if needed
+print_step "Setting up PATH"
+
+# Check if ~/.cargo/bin is in PATH
+if [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
+    print_info "Adding ~/.cargo/bin to PATH..."
     
-    # OS-specific post-installation notes
-    case $OS in
-        "Linux")
-            echo -e "${YELLOW}Linux Notes:${NC}"
-            echo -e "  • If rustloader is not found, run: source ~/.bashrc (or ~/.zshrc)"
-            echo -e "  • For system-wide installation, consider running: sudo cp ~/.cargo/bin/rustloader /usr/local/bin/"
+    # Detect shell
+    SHELL_NAME=$(basename "$SHELL")
+    
+    case $SHELL_NAME in
+        "bash")
+            PROFILE_FILE="$HOME/.bashrc"
             ;;
-        "macOS")
-            echo -e "${YELLOW}macOS Notes:${NC}"
-            echo -e "  • If you encounter permission issues with dependencies, run: brew doctor"
-            echo -e "  • Make sure your PATH includes: $HOME/.cargo/bin"
+        "zsh")
+            PROFILE_FILE="$HOME/.zshrc"
             ;;
-        "Windows")
-            echo -e "${YELLOW}Windows Notes:${NC}"
-            echo -e "  • You may need to restart your terminal or computer for PATH changes to take effect"
-            echo -e "  • If rustloader is not found, check that %USERPROFILE%\\.cargo\\bin is in your PATH"
+        *)
+            PROFILE_FILE="$HOME/.profile"
             ;;
     esac
     
-    echo -e "${BLUE}========================================${NC}"
-    
-    # Inform about support channels
-    echo -e "${GREEN}Need help or have questions?${NC}"
-    echo -e "  • Visit: https://rustloader.com/docs"
-    echo -e "  • Report issues: https://github.com/ibra2000sd/rustloader/issues"
-    echo -e "${BLUE}========================================${NC}"
-}
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$PROFILE_FILE"
+    print_success "Added ~/.cargo/bin to PATH in $PROFILE_FILE"
+    print_info "Please run 'source $PROFILE_FILE' or restart your terminal to apply changes."
+else
+    print_success "~/.cargo/bin is already in PATH."
+fi
 
-# Main installation process
-main() {
-    echo -e "${BLUE}Starting installation...${NC}"
-    
-    install_rust
-    install_dependencies
-    
-    if ! verify_dependencies; then
-        echo -e "${RED}Dependency verification failed. Exiting.${NC}"
-        exit 1
-    fi
-    
-    install_rustloader
-    setup_path
-    cleanup_existing_data
-    test_installation
-    verify_full_installation
-    display_instructions
-}
+# Create download directories
+print_step "Creating download directories"
 
-# Run the installation
-main
+mkdir -p "$HOME/Downloads/rustloader/videos"
+mkdir -p "$HOME/Downloads/rustloader/audio"
+print_success "Created download directories in $HOME/Downloads/rustloader/"
+
+# Clean up
+print_step "Cleaning up"
+cd "$HOME"
+rm -rf "$TMP_DIR"
+print_success "Removed temporary files"
+
+# Test the installation
+print_step "Testing Rustloader installation"
+
+export PATH="$HOME/.cargo/bin:$PATH"
+if command_exists rustloader; then
+    RUSTLOADER_VERSION=$(rustloader --version 2>/dev/null)
+    print_success "Rustloader is installed and in PATH."
+    print_success "Version: $RUSTLOADER_VERSION"
+else
+    print_warning "Rustloader is not in PATH. You may need to restart your terminal or run: export PATH=\"\$HOME/.cargo/bin:\$PATH\""
+    print_info "You can verify the installation manually by running: $HOME/.cargo/bin/rustloader --version"
+fi
+
+# Display completion message
+print_step "Installation completed!"
+
+echo -e "${GREEN}╔═════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║  Rustloader has been successfully installed!    ║${NC}"
+echo -e "${GREEN}╚═════════════════════════════════════════════════╝${NC}"
+
+echo -e "\n${CYAN}Basic Usage:${NC}"
+echo -e "  ${BLUE}rustloader${NC} [URL] [OPTIONS]"
+
+echo -e "\n${CYAN}Examples:${NC}"
+echo -e "  ${BLUE}rustloader${NC} https://www.youtube.com/watch?v=dQw4w9WgXcQ                  # Download video"
+echo -e "  ${BLUE}rustloader${NC} https://www.youtube.com/watch?v=dQw4w9WgXcQ --format mp3     # Download audio"
+echo -e "  ${BLUE}rustloader${NC} https://www.youtube.com/watch?v=dQw4w9WgXcQ --quality 720    # Set quality"
+echo -e "  ${BLUE}rustloader${NC} --help                                                        # Show all options"
+
+echo -e "\n${CYAN}OS-Specific Notes:${NC}"
+case $OS in
+    "Linux")
+        echo -e "  • If ${BLUE}rustloader${NC} is not found, run: ${GREEN}source $PROFILE_FILE${NC}"
+        echo -e "  • For system-wide installation: ${GREEN}sudo cp ~/.cargo/bin/rustloader /usr/local/bin/${NC}"
+        ;;
+    "macOS")
+        echo -e "  • If you encounter permissions issues, run: ${GREEN}brew doctor${NC}"
+        echo -e "  • Make sure your PATH includes: ${GREEN}$HOME/.cargo/bin${NC}"
+        ;;
+    "Windows")
+        echo -e "  • You may need to restart your terminal or computer for PATH changes to take effect"
+        echo -e "  • Make sure ${GREEN}%USERPROFILE%\\.cargo\\bin${NC} is in your PATH"
+        ;;
+esac
+
+echo -e "\n${CYAN}Need help or have questions?${NC}"
+echo -e "  • Visit: ${GREEN}https://rustloader.com/docs${NC}"
+echo -e "  • Report issues: ${GREEN}https://github.com/ibra2000sd/rustloader/issues${NC}"
+
+echo -e "\n${YELLOW}Enjoying Rustloader? Consider upgrading to Pro for:${NC}"
+echo -e "  • ${GREEN}4K/8K video quality downloads${NC}"
+echo -e "  • ${GREEN}High-fidelity audio (320kbps, FLAC)${NC}"
+echo -e "  • ${GREEN}Unlimited downloads${NC}"
+echo -e "  • ${GREEN}Multi-threaded downloads for maximum speed${NC}"
+echo -e "  • ${GREEN}Priority updates and support${NC}"
+
+echo -e "\n${BLUE}Thank you for installing Rustloader!${NC}"
