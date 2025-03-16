@@ -1,79 +1,139 @@
-name: Claude Auto Code Review & Fix
+name: Rust Analysis with Claude AI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
+    paths:
+      - '**.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
+    paths:
+      - '**.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch: # Allow manual triggering
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   analyze-and-fix:
+    name: Analyze and Fix Rust Code
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Needed for PR comment actions
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Rust
+      - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
+          profile: minimal
           toolchain: stable
-          components: clippy
+          components: rustfmt, clippy
           override: true
 
-      - name: Install Python
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
           cache: 'pip'
 
-      - name: Install Dependencies
+      - name: Install Python dependencies
         run: |
-          pip install requests
+          pip install requests anthropic
+
+      - name: Install cargo-audit
+        run: |
           cargo install cargo-audit
+          echo "$(cargo --version)"
+          echo "$(cargo clippy --version)"
+          echo "$(cargo audit --version)"
 
-      - name: Run Clippy and Cargo Audit
+      - name: Run Clippy
         run: |
-          cargo clippy --all-targets --message-format=json > clippy-results.json || echo "Clippy found issues"
-          cargo audit --json > audit-results.json || echo "Cargo audit found security issues"
+          cargo clippy --message-format=json --all-targets --all-features > clippy_output.json || true
 
-      - name: Analyze Code with Claude
+      - name: Run Cargo Audit
+        run: |
+          cargo audit --json > audit_output.json || true
+
+      - name: Run additional code metrics
+        run: |
+          echo "======== Project Structure ========" > project_info.txt
+          find . -type f -name "*.rs" | sort >> project_info.txt
+          echo "======== Dependency Tree ========" >> project_info.txt
+          cargo tree >> project_info.txt || echo "Failed to get dependency tree" >> project_info.txt
+          
+          # Get statistics for context
+          echo "======== Code Statistics ========" >> project_info.txt
+          find . -name "*.rs" -type f -exec cat {} \; | wc -l | awk '{print "Total lines of Rust code: " $1}' >> project_info.txt
+          find . -name "*.rs" -type f | wc -l | awk '{print "Total Rust files: " $1}' >> project_info.txt
+
+      - name: Get PR details
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          echo "PR_TITLE=${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+          echo "PR_BODY<<EOF" >> $GITHUB_ENV
+          echo "${{ github.event.pull_request.body }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Analyze with Claude
+        id: analyze
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_INFO: ${{ env.PR_NUMBER }} ${{ env.PR_TITLE }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.repository }}
         run: |
-          python analyze_code.py
-          if grep -q "fixes_available=true" analyze_output.txt; then
-            echo "fixes_available=true" >> $GITHUB_ENV
+          python .github/scripts/analyze_code.py
+
+      - name: Apply fixes from Claude
+        id: apply-fixes
+        run: |
+          python .github/scripts/apply_fixes.py
+          echo "HAS_CHANGES=$(git status --porcelain | grep -c '\.rs$' || echo 0)" >> $GITHUB_ENV
+
+      - name: Test fixes
+        if: env.HAS_CHANGES > 0
+        run: |
+          cargo check && cargo test
+          if [ $? -eq 0 ]; then
+            echo "TESTS_PASSED=true" >> $GITHUB_ENV
           else
-            echo "fixes_available=false" >> $GITHUB_ENV
+            echo "TESTS_PASSED=false" >> $GITHUB_ENV
           fi
 
-      - name: Apply Fixes
-        if: env.fixes_available == 'true'
-        run: python apply_fixes.py fixes.json
-
-      - name: Run Tests After Fixes
-        if: env.fixes_available == 'true'
+      - name: Commit and push changes
+        if: env.HAS_CHANGES > 0 && env.TESTS_PASSED == 'true'
         run: |
-          if cargo test; then
-            echo "check_passed=true" >> $GITHUB_ENV
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git commit -m "Auto-fix: Apply code improvements suggested by Claude AI"
+          
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # For PR, push to the PR branch
+            git push origin HEAD:${{ github.head_ref }}
           else
-            echo "Reverting changes due to test failures..."
-            git checkout -- .
-            echo "check_passed=false" >> $GITHUB_ENV
+            # For push events, push to the original branch
+            git push origin HEAD:${{ github.ref_name }}
           fi
-
-      - name: Commit and Push Fixes
-        if: env.fixes_available == 'true' && env.check_passed == 'true' && github.event_name == 'pull_request'
-        run: |
-          git add .
-          git commit -m "Automated fixes from Claude [skip ci]" || echo "No changes to commit"
-          git push origin "HEAD:${GITHUB_HEAD_REF}" || echo "No changes to push"
 
       - name: Comment on PR
         if: github.event_name == 'pull_request'
@@ -82,11 +142,48 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            let report = fs.readFileSync('claude-analysis-report.md', 'utf8');
-            let comment = `## Claude Code Analysis Report\n\n${report}`;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+            
+            try {
+              const reportPath = 'claude_analysis_report.md';
+              
+              if (fs.existsSync(reportPath)) {
+                const reportContent = fs.readFileSync(reportPath, 'utf8');
+                
+                // Add a header
+                const fullReport = `## 🔍 Claude AI Code Analysis
+                
+                ${reportContent}
+                
+                <details>
+                <summary>How this works</summary>
+                
+                This analysis was performed automatically using Claude AI to analyze the code and suggest improvements.
+                ${process.env.HAS_CHANGES > 0 ? 'Changes have been automatically applied and committed.' : 'No changes were required.'}
+                </details>
+                `;
+                
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: fullReport
+                });
+                
+                console.log('Successfully posted analysis as a comment on the PR');
+              } else {
+                console.log('No analysis report found to post');
+              }
+            } catch (error) {
+              console.error('Error posting comment:', error);
+            }
+
+      - name: Upload analysis artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-analysis-results
+          path: |
+            clippy_output.json
+            audit_output.json
+            claude_response.json
+            claude_analysis_report.md
+            project_info.txt
