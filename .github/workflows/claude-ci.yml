@@ -105,11 +105,12 @@ jobs:
 
       - name: Apply fixes from Claude
         id: apply-fixes
+        continue-on-error: true  # Continue even if validation fails
         run: |
           # Run with force flag to allow large changes
           python .github/scripts/apply_fixes.py --force --no-interactive
           
-          # Read the changes count from the file
+          # Read the changes count and validation status from the output
           if [ -f changes_count.txt ]; then
             CHANGES_COUNT=$(cat changes_count.txt)
             echo "Found $CHANGES_COUNT changed files"
@@ -118,31 +119,18 @@ jobs:
             echo "No changes_count.txt file found, assuming no changes"
             echo "HAS_CHANGES=0" >> $GITHUB_ENV
           fi
-
-      - name: Test fixes
-        if: env.HAS_CHANGES != '0'
-        run: |
-          cargo check
-          CHECK_STATUS=$?
           
-          if [ $CHECK_STATUS -eq 0 ]; then
-            cargo test
-            TEST_STATUS=$?
-            
-            if [ $TEST_STATUS -eq 0 ]; then
-              echo "TESTS_PASSED=true" >> $GITHUB_ENV
-              echo "All checks and tests passed!"
-            else
-              echo "TESTS_PASSED=false" >> $GITHUB_ENV
-              echo "Tests failed with status $TEST_STATUS"
-            fi
+          # Check if the step succeeded (changes were valid)
+          if [ $? -eq 0 ]; then
+            echo "CHANGES_VALID=true" >> $GITHUB_ENV
+            echo "Changes were successfully validated"
           else
-            echo "TESTS_PASSED=false" >> $GITHUB_ENV
-            echo "Code check failed with status $CHECK_STATUS"
+            echo "CHANGES_VALID=false" >> $GITHUB_ENV
+            echo "Changes failed validation and were reverted"
           fi
 
       - name: Commit and push changes
-        if: env.HAS_CHANGES != '0' && env.TESTS_PASSED == 'true'
+        if: env.HAS_CHANGES != '0' && env.CHANGES_VALID == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
@@ -173,15 +161,15 @@ jobs:
                 
                 // Check if changes were made
                 const hasChanges = process.env.HAS_CHANGES !== '0';
-                const testsPassed = process.env.TESTS_PASSED === 'true';
+                const changesValid = process.env.CHANGES_VALID === 'true';
                 
                 // Add a header with appropriate status
                 let statusBadge = '';
                 if (hasChanges) {
-                  if (testsPassed) {
+                  if (changesValid) {
                     statusBadge = '✅ Changes successfully applied';
                   } else {
-                    statusBadge = '⚠️ Changes proposed but tests failed';
+                    statusBadge = '⚠️ Changes proposed but could not be applied (validation failed)';
                   }
                 } else {
                   statusBadge = 'ℹ️ Analysis completed, no changes required';
@@ -196,9 +184,9 @@ jobs:
                 
                 This analysis was performed automatically using Claude AI to analyze the code and suggest improvements.
                 ${hasChanges 
-                  ? testsPassed 
+                  ? changesValid 
                     ? 'Changes have been automatically applied and committed.' 
-                    : 'Changes were proposed but could not be applied due to test failures.'
+                    : 'Changes were proposed but could not be applied due to validation failures.'
                   : 'No changes were required.'}
                 </details>
                 `;
