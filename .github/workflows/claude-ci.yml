@@ -109,8 +109,9 @@ jobs:
         run: |
           # Run with force flag to allow large changes
           python .github/scripts/apply_fixes.py --force --no-interactive
+          SCRIPT_EXIT_CODE=$?
           
-          # Read the changes count and validation status from the output
+          # Read the changes count
           if [ -f changes_count.txt ]; then
             CHANGES_COUNT=$(cat changes_count.txt)
             echo "Found $CHANGES_COUNT changed files"
@@ -120,8 +121,8 @@ jobs:
             echo "HAS_CHANGES=0" >> $GITHUB_ENV
           fi
           
-          # Check if the step succeeded (changes were valid)
-          if [ $? -eq 0 ]; then
+          # Check if the Python script succeeded (changes were valid)
+          if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
             echo "CHANGES_VALID=true" >> $GITHUB_ENV
             echo "Changes were successfully validated"
           else
