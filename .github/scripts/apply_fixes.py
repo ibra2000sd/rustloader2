@@ -414,54 +414,69 @@ def main():
                     if not validate_single_file(file_path):
                         print(f"Validation failed for {file_path}, reverting changes")
                         revert_file(file_path)
-                                                failed_fixes.append(file_path)
+                        changed_files.remove(file_path)
+                        failed_fixes.append(fix)
                         continue
-
+                
+                # Validate the whole project with cargo check
+                # We do this for each file because some issues only appear when the whole project is built
+                if not args.no_validation:
+                    if not validate_project():
+                        print(f"Project validation failed after fixing {file_path}, reverting changes")
+                        revert_file(file_path)
+                        changed_files.remove(file_path)
+                        failed_fixes.append(fix)
     else:
-        # Batch mode: Apply all fixes first, then validate
-        print("Applying all fixes in batch mode")
+        # Batch mode: apply all fixes then validate
+        print("Using batch mode: applying all fixes before validation")
+        
+        # Apply all fixes
         for fix in fixes:
             file_path = fix['file']
             if apply_fix_to_file(fix, applied_fixes, force=args.force,
                                max_change_percentage=args.max_change_percentage):
                 changed_files.add(file_path)
-
+        
         # Validate all changed files
-        if not args.no_validation:
-            print("Validating all modified files")
+        if not args.no_validation and changed_files:
+            # First validate each file's syntax
+            invalid_files = []
             for file_path in changed_files:
                 if not validate_single_file(file_path):
-                    print(f"Validation failed for {file_path}, reverting changes")
+                    invalid_files.append(file_path)
+            
+            # Then validate the entire project
+            project_valid = validate_project()
+            
+            # If any validation failed, revert all changes
+            if invalid_files or not project_valid:
+                print("Validation failed, reverting all changes")
+                for file_path in changed_files:
                     revert_file(file_path)
-                    failed_fixes.append(file_path)
-
-    # Validate entire project if necessary
-    if changed_files and not args.no_validation:
-        print("Performing final project-wide validation with cargo check")
-        if not validate_project():
-            print("Project validation failed, reverting all changes")
-            for file_path in changed_files:
-                revert_file(file_path)
-            failed_fixes = list(changed_files)
-
-    # Write results
-    applied_fixes_count = sum(applied_fixes.values())
-    print(f"Successfully applied {applied_fixes_count} fixes")
-    print(f"{len(failed_fixes)} fixes failed or were reverted")
-
-    # Write to changes_count.txt for GitHub Actions
+                changed_files = set()
+    
+    # Summary
+    print("\n=== Summary ===")
+    print(f"Total fixes found: {len(fixes)}")
+    print(f"Files changed: {len(changed_files)}")
+    print(f"Failed fixes: {len(failed_fixes)}")
+    
+    # Write output for GitHub Actions
     with open('changes_count.txt', 'w') as f:
-        f.write(str(applied_fixes_count))
-
+        f.write(str(len(changed_files)))
+    
     # Use the newer GitHub Actions output method
     if 'GITHUB_OUTPUT' in os.environ:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-            f.write(f"has_changes={1 if applied_fixes_count > 0 else 0}\n")
-            f.write(f"changes_valid={1 if len(failed_fixes) == 0 else 0}\n")
-
-    if applied_fixes_count == 0:
+            f.write(f"has_changes={1 if changed_files else 0}\n")
+            f.write(f"changes_valid={len(failed_fixes) == 0}\n")
+    
+    # If we made changes, exit with code 1 to indicate changes were made
+    # This can be used in CI to trigger a commit
+    if changed_files:
         sys.exit(1)
-    sys.exit(0)
+    else:
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
