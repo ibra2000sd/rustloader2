@@ -569,6 +569,9 @@ def revert_file(file_path):
         return False
 
 def main():
+    # Declare the global variable before using it
+    global FUZZY_MATCH_THRESHOLD
+    
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Apply fixes from Claude AI')
     parser.add_argument('--force', action='store_true', 
@@ -590,6 +593,9 @@ def main():
     parser.add_argument('--fuzzy-threshold', type=float, default=FUZZY_MATCH_THRESHOLD,
                         help=f'Threshold percentage for fuzzy matching (default: {FUZZY_MATCH_THRESHOLD})')
     args = parser.parse_args()
+    
+    # Assign the parsed value after defining the variable globally
+    FUZZY_MATCH_THRESHOLD = args.fuzzy_threshold
     
     # Stats tracking
     stats = FixStats()
@@ -637,10 +643,6 @@ def main():
     applied_fixes = {}  # Track how many fixes we've applied to each file
     changed_files = set()  # Track which files we've changed
     failed_fixes = []  # Track fixes that failed to apply or validate
-    
-    # Set fuzzy matching threshold
-    global FUZZY_MATCH_THRESHOLD
-    FUZZY_MATCH_THRESHOLD = args.fuzzy_threshold
     
     # First do a dry run to count how many files would change
     print("Performing dry run...")
