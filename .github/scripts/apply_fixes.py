@@ -108,20 +108,95 @@ def validate_fix(fix):
     return True
 
 def validate_rust_syntax(file_path):
-    """Validate Rust file syntax using rustc --check."""
+    """Validate Rust file syntax using cargo check."""
     print(f"Validating syntax of {file_path}...")
     
-    result = subprocess.run(
-        ['rustc', '--check', file_path],
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode != 0:
-        print(f"Error: Syntax validation failed for {file_path}")
-        print(result.stderr)
+    # Get the crate name from the file path
+    try:
+        # First use cargo check to validate the entire project
+        # This catches most errors and is safer than trying to check individual files
+        result = subprocess.run(
+            ['cargo', 'check', '--quiet'],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            print(f"Error: Project validation failed for changes in {file_path}")
+            print(result.stderr)
+            return False
+        
+        # For additional safety, we can use rustc to check the file
+        # For Rust 2021 edition, uses this approach
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, "temp_check.rs")
+        
+        # Copy the file content to the temp file
+        with open(file_path, 'r', encoding='utf-8') as src:
+            file_content = src.read()
+        
+        # Add the necessary module declarations
+        # This is a simplified approach and might not work for all files
+        with open(temp_file, 'w', encoding='utf-8') as dst:
+            dst.write("// Temporary file for syntax check\n")
+            dst.write(file_content)
+        
+        try:
+            # Use rustc in lib mode to check syntax
+            result = subprocess.run(
+                ['rustc', '--edition=2021', '--crate-type=lib', '-o', os.path.devnull, temp_file],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                print(f"Warning: Individual file validation failed for {file_path}")
+                print(result.stderr)
+                # We don't return False here as this might be too strict
+                # The cargo check is more reliable for the whole project
+        except Exception as e:
+            print(f"Warning: Error during file-specific validation: {e}")
+        
+        # Clean up the temp directory
+        try:
+            os.remove(temp_file)
+            os.rmdir(temp_dir)
+        except Exception:
+            pass
+        
+    except Exception as e:
+        print(f"Error during validation: {e}")
         return False
     
+    return True
+
+def validate_single_file(file_path):
+    """Validate a single Rust file for syntax correctness."""
+    print(f"Validating {file_path}...")
+    
+    # Use our improved validate_rust_syntax function
+    return validate_rust_syntax(file_path)
+
+def validate_project():
+    """Validate the entire project with cargo check."""
+    print("Running cargo check to validate all changes...")
+    
+    result = subprocess.run(['cargo', 'check'], 
+                         capture_output=True, 
+                         text=True)
+    
+    if result.returncode != 0:
+        print("Error: Changes caused compilation errors:")
+        print(result.stderr)
+        
+        print("Details of errors:")
+        for line in result.stderr.split('\n'):
+            if "error" in line:
+                print(f"  {line}")
+        
+        return False
+    
+    print("Project validation successful!")
     return True
 
 def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change_percentage=None):
@@ -200,10 +275,16 @@ def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change
                     return False
             else:
                 return False
-            
+        
         # If we match after normalization, use a regex replacement with flexible whitespace
         pattern = re.escape(normalized_original).replace('\\ ', r'\s+')
         try:
+            # This is dangerous - we might break the code with regex replacement
+            # Let's skip this approach for now as it's too risky
+            if not force:
+                print(f"Skipping normalized fix for {file_path} - use --force to override")
+                return False
+                
             updated_content = re.sub(pattern, fixed, normalized_content)
             
             # Change percentage check
@@ -259,16 +340,6 @@ def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change
         print(f"Error writing to file {file_path}: {e}")
         return False
 
-def validate_single_file(file_path):
-    """Validate a single Rust file for syntax correctness."""
-    print(f"Validating {file_path}...")
-    
-    # First check the syntax with rustc
-    if not validate_rust_syntax(file_path):
-        return False
-    
-    return True
-
 def revert_file(file_path):
     """Revert a file to its backup version."""
     backup_path = f"{file_path}.bak"
@@ -285,35 +356,13 @@ def revert_file(file_path):
         print(f"No backup found for {file_path}")
         return False
 
-def validate_project():
-    """Validate the entire project with cargo check."""
-    print("Running cargo check to validate all changes...")
-    
-    result = subprocess.run(['cargo', 'check'], 
-                         capture_output=True, 
-                         text=True)
-    
-    if result.returncode != 0:
-        print("Error: Changes caused compilation errors:")
-        print(result.stderr)
-        
-        print("Details of errors:")
-        for line in result.stderr.split('\n'):
-            if "error" in line:
-                print(f"  {line}")
-        
-        return False
-    
-    print("Project validation successful!")
-    return True
-
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Apply fixes from Claude AI')
     parser.add_argument('--force', action='store_true', 
                         help='Force applying fixes regardless of change size')
-    parser.add_argument('--max-change', type=float, dest='max_change_percentage',
-                        help=f'Maximum percentage of file that can be changed (default: {MAX_CHANGE_PERCENTAGE}%)')
+    parser.add_argument('--max-change', type=float, dest='max_change_percentage', default=50.0,
+                        help=f'Maximum percentage of file that can be changed (default: 50%%)')
     parser.add_argument('--fixes-file', type=str, default='claude_fixes.json',
                         help='Path to the JSON file containing fixes (default: claude_fixes.json)')
     parser.add_argument('--no-interactive', action='store_true',
