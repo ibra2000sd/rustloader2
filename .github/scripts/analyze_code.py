@@ -185,7 +185,22 @@ def call_claude_api(prompt, api_key):
                 model="claude-3-opus-20240229",
                 max_tokens=4000,
                 temperature=0,
-                system="You are an expert Rust programmer tasked with analyzing code quality and suggesting fixes. Focus on correctness, performance, security, and maintainability.",
+                system="""You are an expert Rust programmer tasked with analyzing code quality and suggesting fixes. 
+                Focus on correctness, performance, security, and maintainability.
+                
+                IMPORTANT FIX FORMATTING GUIDELINES:
+                1. Suggest small, targeted fixes rather than large rewrites
+                2. Each fix should address a single issue
+                3. Maintain the overall structure and organization of the original code
+                4. Preserve function boundaries and indentation
+                5. Ensure each fix is syntactically valid Rust code
+                6. Prefer minimal changes that solve the issue
+                7. Never combine multiple lines of code into a single line
+                8. Never remove important newlines between functions or code blocks
+                9. Ensure that all braces {}, parentheses (), and brackets [] are properly matched
+                10. If you're unsure about a fix, suggest a safer, more conservative change
+
+                These guidelines are crucial to ensure that your suggestions can be automatically applied without breaking the code structure.""",
                 messages=[
                     {"role": "user", "content": prompt}
                 ]
@@ -276,9 +291,19 @@ explanation: |
 </FIXES>
 ```
 
-4. Use the exact <FIXES> format for automatic code updates. Ensure the original code section exactly matches what's in the file.
+4. IMPORTANT REQUIREMENTS FOR FIXES:
+   - Make each fix as small and focused as possible
+   - Maintain the exact same code structure, including line breaks and indentation
+   - Never combine multiple statements into a single line
+   - Ensure each fix is syntactically valid Rust code
+   - Do NOT remove newlines between function declarations or code blocks
+   - Ensure all braces {}, parentheses (), and brackets [] are properly paired
+   - If a line contains complex code, it's better to leave it as-is than risk breaking it
+   - Each fix should address a single issue only
 
-5. Provide additional recommendations for improving the codebase that weren't directly flagged by the tools.
+5. Use the exact <FIXES> format for automatic code updates. Ensure the original code section exactly matches what's in the file.
+
+6. Provide additional recommendations for improving the codebase that weren't directly flagged by the tools.
 
 Focus on practical, high-value improvements that will make the code more reliable, secure, and maintainable.
 """
