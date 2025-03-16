@@ -350,10 +350,15 @@ def main():
     
     if not raw_fixes:
         print("No fixes to apply")
-        # To handle GitHub Actions environment variable
-        print("::set-output name=has_changes::0")
+        # Write to changes_count.txt for GitHub Actions
         with open('changes_count.txt', 'w') as f:
             f.write("0")
+        
+        # Use the newer GitHub Actions output method
+        if 'GITHUB_OUTPUT' in os.environ:
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                f.write(f"has_changes=0\n")
+                f.write(f"changes_valid=false\n")
         sys.exit(0)
     
     print(f"Found {len(raw_fixes)} potential fixes to apply")
@@ -389,10 +394,15 @@ def main():
             confirmation = input(f"Apply changes to {len(dry_run_changes)} files? (y/n): ").lower()
             if confirmation != 'y':
                 print("Operation cancelled by user")
-                # To handle GitHub Actions environment variable
-                print("::set-output name=has_changes::0")
+                # Write to changes_count.txt for GitHub Actions
                 with open('changes_count.txt', 'w') as f:
                     f.write("0")
+                
+                # Use the newer GitHub Actions output method
+                if 'GITHUB_OUTPUT' in os.environ:
+                    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                        f.write(f"has_changes=0\n")
+                        f.write(f"changes_valid=false\n")
                 sys.exit(0)
         except EOFError:
             print("Non-interactive environment detected, proceeding without confirmation")
@@ -410,34 +420,41 @@ def main():
     print(f"- Files modified: {len(changed_files)}")
     print(f"- Total changes applied: {sum(applied_fixes.values())}")
     
+    changes_valid = True
+    
     if changed_files:
         print("\nModified files:")
         for file_path in sorted(changed_files):
             print(f"- {file_path}: {applied_fixes.get(file_path, 0)} fixes")
         
         # Validate the changes if requested
-        validated = True
         if not args.no_validation:
-            validated = validate_changes(changed_files, args)
-        
-        # Handle GitHub Actions environment variable
-        changes_count = len(changed_files)
-        print(f"HAS_CHANGES={changes_count}")
-        # For GitHub Actions compatibility
-        print(f"::set-output name=has_changes::{changes_count}")
+            changes_valid = validate_changes(changed_files, args)
         
         # Write the number of changes to a file for GitHub Actions
+        changes_count = len(changed_files)
         with open('changes_count.txt', 'w') as f:
             f.write(str(changes_count))
-            
-        if not validated:
+        
+        # Use the newer GitHub Actions output method
+        if 'GITHUB_OUTPUT' in os.environ:
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                f.write(f"has_changes={changes_count}\n")
+                f.write(f"changes_valid={'true' if changes_valid else 'false'}\n")
+                
+        if not changes_valid:
             sys.exit(1)
     else:
         print("No changes were applied")
-        # For GitHub Actions compatibility
-        print("::set-output name=has_changes::0")
+        # Write to changes_count.txt for GitHub Actions
         with open('changes_count.txt', 'w') as f:
             f.write("0")
+        
+        # Use the newer GitHub Actions output method
+        if 'GITHUB_OUTPUT' in os.environ:
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                f.write(f"has_changes=0\n")
+                f.write(f"changes_valid=false\n")
 
 if __name__ == "__main__":
     main()
