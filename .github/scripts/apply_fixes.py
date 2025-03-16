@@ -241,7 +241,7 @@ def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change
         print(f"Error writing to file {file_path}: {e}")
         return False
 
-def validate_changes(changed_files):
+def validate_changes(changed_files, args):
     """Validate that the changes don't break the code."""
     print("Validating changes...")
     
@@ -259,8 +259,9 @@ def validate_changes(changed_files):
             if "error" in line:
                 print(f"  {line}")
         
-        # Ask user if they want to revert changes
-        if input("Would you like to revert the changes? (y/n): ").lower().startswith('y'):
+        # Auto-revert in non-interactive mode
+        if args.no_interactive:
+            print("Running in non-interactive mode, automatically reverting changes due to compilation errors")
             # Revert the changes using backup files
             for file_path in changed_files:
                 backup_path = f"{file_path}.bak"
@@ -273,22 +274,59 @@ def validate_changes(changed_files):
                         print(f"Manual restore needed from {backup_path}")
             
             print("All changes have been reverted")
+            return False
         else:
-            print("Changes left in place despite compilation errors")
-        
-        return False
+            # Interactive mode
+            try:
+                user_choice = input("Would you like to revert the changes? (y/n): ").lower()
+                if user_choice.startswith('y'):
+                    # Revert the changes using backup files
+                    for file_path in changed_files:
+                        backup_path = f"{file_path}.bak"
+                        if os.path.exists(backup_path):
+                            try:
+                                os.rename(backup_path, file_path)
+                                print(f"Reverted changes to {file_path}")
+                            except Exception as e:
+                                print(f"Error reverting {file_path}: {e}")
+                                print(f"Manual restore needed from {backup_path}")
+                    
+                    print("All changes have been reverted")
+                else:
+                    print("Changes left in place despite compilation errors")
+            except EOFError:
+                print("Non-interactive environment detected, automatically reverting changes")
+                # Revert changes automatically if we can't get input
+                for file_path in changed_files:
+                    backup_path = f"{file_path}.bak"
+                    if os.path.exists(backup_path):
+                        try:
+                            os.rename(backup_path, file_path)
+                            print(f"Reverted changes to {file_path}")
+                        except Exception as e:
+                            print(f"Error reverting {file_path}: {e}")
+                            print(f"Manual restore needed from {backup_path}")
+                print("All changes have been reverted")
+            return False
     
     print("Changes validated successfully!")
     
     # Clean up backup files
-    if input("Remove backup files? (y/n): ").lower().startswith('y'):
-        for file_path in changed_files:
-            backup_path = f"{file_path}.bak"
-            if os.path.exists(backup_path):
-                try:
-                    os.remove(backup_path)
-                except Exception as e:
-                    print(f"Error removing backup {backup_path}: {e}")
+    if not args.no_interactive:
+        try:
+            choice = input("Remove backup files? (y/n): ").lower()
+            if choice.startswith('y'):
+                for file_path in changed_files:
+                    backup_path = f"{file_path}.bak"
+                    if os.path.exists(backup_path):
+                        try:
+                            os.remove(backup_path)
+                        except Exception as e:
+                            print(f"Error removing backup {backup_path}: {e}")
+        except EOFError:
+            print("Non-interactive environment detected, keeping backup files")
+    else:
+        print("Running in non-interactive mode, keeping backup files")
     
     return True
 
@@ -314,6 +352,8 @@ def main():
         print("No fixes to apply")
         # To handle GitHub Actions environment variable
         print("::set-output name=has_changes::0")
+        with open('changes_count.txt', 'w') as f:
+            f.write("0")
         sys.exit(0)
     
     print(f"Found {len(raw_fixes)} potential fixes to apply")
@@ -345,11 +385,17 @@ def main():
     
     # Ask for confirmation in interactive mode
     if not args.no_interactive and dry_run_changes:
-        if input(f"Apply changes to {len(dry_run_changes)} files? (y/n): ").lower() != 'y':
-            print("Operation cancelled by user")
-            # To handle GitHub Actions environment variable
-            print("::set-output name=has_changes::0")
-            sys.exit(0)
+        try:
+            confirmation = input(f"Apply changes to {len(dry_run_changes)} files? (y/n): ").lower()
+            if confirmation != 'y':
+                print("Operation cancelled by user")
+                # To handle GitHub Actions environment variable
+                print("::set-output name=has_changes::0")
+                with open('changes_count.txt', 'w') as f:
+                    f.write("0")
+                sys.exit(0)
+        except EOFError:
+            print("Non-interactive environment detected, proceeding without confirmation")
     
     # Reset and apply for real
     changed_files = set()
@@ -370,10 +416,9 @@ def main():
             print(f"- {file_path}: {applied_fixes.get(file_path, 0)} fixes")
         
         # Validate the changes if requested
+        validated = True
         if not args.no_validation:
-            validated = validate_changes(changed_files)
-            if not validated and not args.no_interactive:
-                print("Validation failed")
+            validated = validate_changes(changed_files, args)
         
         # Handle GitHub Actions environment variable
         changes_count = len(changed_files)
@@ -384,6 +429,9 @@ def main():
         # Write the number of changes to a file for GitHub Actions
         with open('changes_count.txt', 'w') as f:
             f.write(str(changes_count))
+            
+        if not validated:
+            sys.exit(1)
     else:
         print("No changes were applied")
         # For GitHub Actions compatibility
