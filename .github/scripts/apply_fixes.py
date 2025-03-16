@@ -8,7 +8,7 @@ This script:
 3. Applies the changes to the appropriate files
 4. Validates the changes to ensure they don't break the code
 
-Improved version with flexible size limits and better error handling.
+Improved version with incremental fix application and better validation.
 """
 
 import json
@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import argparse
+import tempfile
 from pathlib import Path
 
 # Maximum number of fixes to apply per file to avoid large-scale changes
@@ -102,6 +103,23 @@ def validate_fix(fix):
     # Check if original and fixed are identical
     if fix['original'] == fix['fixed']:
         print(f"Warning: Original and fixed code are identical for {fix['file']}")
+        return False
+    
+    return True
+
+def validate_rust_syntax(file_path):
+    """Validate Rust file syntax using rustc --check."""
+    print(f"Validating syntax of {file_path}...")
+    
+    result = subprocess.run(
+        ['rustc', '--check', file_path],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        print(f"Error: Syntax validation failed for {file_path}")
+        print(result.stderr)
         return False
     
     return True
@@ -217,13 +235,13 @@ def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change
         print(f"Would update {file_path} (change: {change_percent:.1f}%)")
         return True
     
+    # Create a backup of the original file
+    backup_path = f"{file_path}.bak"
+    with open(backup_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
     # Apply the changes
     try:
-        # Create a backup of the original file
-        backup_path = f"{file_path}.bak"
-        with open(backup_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
         # Write the updated content
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(updated_content)
@@ -241,14 +259,39 @@ def apply_fix_to_file(fix, applied_fixes, dry_run=False, force=False, max_change
         print(f"Error writing to file {file_path}: {e}")
         return False
 
-def validate_changes(changed_files, args):
-    """Validate that the changes don't break the code."""
-    print("Validating changes...")
+def validate_single_file(file_path):
+    """Validate a single Rust file for syntax correctness."""
+    print(f"Validating {file_path}...")
     
-    # Run cargo check to ensure the code still compiles
+    # First check the syntax with rustc
+    if not validate_rust_syntax(file_path):
+        return False
+    
+    return True
+
+def revert_file(file_path):
+    """Revert a file to its backup version."""
+    backup_path = f"{file_path}.bak"
+    if os.path.exists(backup_path):
+        try:
+            os.rename(backup_path, file_path)
+            print(f"Reverted changes to {file_path}")
+            return True
+        except Exception as e:
+            print(f"Error reverting {file_path}: {e}")
+            print(f"Manual restore needed from {backup_path}")
+            return False
+    else:
+        print(f"No backup found for {file_path}")
+        return False
+
+def validate_project():
+    """Validate the entire project with cargo check."""
+    print("Running cargo check to validate all changes...")
+    
     result = subprocess.run(['cargo', 'check'], 
-                            capture_output=True, 
-                            text=True)
+                         capture_output=True, 
+                         text=True)
     
     if result.returncode != 0:
         print("Error: Changes caused compilation errors:")
@@ -259,75 +302,9 @@ def validate_changes(changed_files, args):
             if "error" in line:
                 print(f"  {line}")
         
-        # Auto-revert in non-interactive mode
-        if args.no_interactive:
-            print("Running in non-interactive mode, automatically reverting changes due to compilation errors")
-            # Revert the changes using backup files
-            for file_path in changed_files:
-                backup_path = f"{file_path}.bak"
-                if os.path.exists(backup_path):
-                    try:
-                        os.rename(backup_path, file_path)
-                        print(f"Reverted changes to {file_path}")
-                    except Exception as e:
-                        print(f"Error reverting {file_path}: {e}")
-                        print(f"Manual restore needed from {backup_path}")
-            
-            print("All changes have been reverted")
-            return False
-        else:
-            # Interactive mode
-            try:
-                user_choice = input("Would you like to revert the changes? (y/n): ").lower()
-                if user_choice.startswith('y'):
-                    # Revert the changes using backup files
-                    for file_path in changed_files:
-                        backup_path = f"{file_path}.bak"
-                        if os.path.exists(backup_path):
-                            try:
-                                os.rename(backup_path, file_path)
-                                print(f"Reverted changes to {file_path}")
-                            except Exception as e:
-                                print(f"Error reverting {file_path}: {e}")
-                                print(f"Manual restore needed from {backup_path}")
-                    
-                    print("All changes have been reverted")
-                else:
-                    print("Changes left in place despite compilation errors")
-            except EOFError:
-                print("Non-interactive environment detected, automatically reverting changes")
-                # Revert changes automatically if we can't get input
-                for file_path in changed_files:
-                    backup_path = f"{file_path}.bak"
-                    if os.path.exists(backup_path):
-                        try:
-                            os.rename(backup_path, file_path)
-                            print(f"Reverted changes to {file_path}")
-                        except Exception as e:
-                            print(f"Error reverting {file_path}: {e}")
-                            print(f"Manual restore needed from {backup_path}")
-                print("All changes have been reverted")
-            return False
+        return False
     
-    print("Changes validated successfully!")
-    
-    # Clean up backup files
-    if not args.no_interactive:
-        try:
-            choice = input("Remove backup files? (y/n): ").lower()
-            if choice.startswith('y'):
-                for file_path in changed_files:
-                    backup_path = f"{file_path}.bak"
-                    if os.path.exists(backup_path):
-                        try:
-                            os.remove(backup_path)
-                        except Exception as e:
-                            print(f"Error removing backup {backup_path}: {e}")
-        except EOFError:
-            print("Non-interactive environment detected, keeping backup files")
-    else:
-        print("Running in non-interactive mode, keeping backup files")
-    
+    print("Project validation successful!")
     return True
 
 def main():
@@ -343,6 +320,8 @@ def main():
                         help='Run in non-interactive mode (no prompts)')
     parser.add_argument('--no-validation', action='store_true',
                         help='Skip validation of changes')
+    parser.add_argument('--incremental', action='store_true',
+                        help='Apply and validate fixes incrementally (one at a time)')
     args = parser.parse_args()
     
     # Parse the fixes
@@ -374,16 +353,27 @@ def main():
     
     print(f"Successfully parsed {len(fixes)} fixes")
     
+    # Group fixes by file
+    fixes_by_file = {}
+    for fix in fixes:
+        if not fix.get('file'):
+            continue
+        file_path = fix['file']
+        if file_path not in fixes_by_file:
+            fixes_by_file[file_path] = []
+        fixes_by_file[file_path].append(fix)
+    
     # Apply the fixes
     applied_fixes = {}  # Track how many fixes we've applied to each file
     changed_files = set()  # Track which files we've changed
+    failed_fixes = []  # Track fixes that failed to apply or validate
     
     # First do a dry run to count how many files would change
     print("Performing dry run...")
     dry_run_changes = set()
     for fix in fixes:
         if apply_fix_to_file(fix, {}, dry_run=True, force=args.force, 
-                            max_change_percentage=args.max_change_percentage):
+                           max_change_percentage=args.max_change_percentage):
             dry_run_changes.add(fix['file'])
     
     print(f"Dry run complete. {len(dry_run_changes)} files would be changed.")
@@ -407,54 +397,71 @@ def main():
         except EOFError:
             print("Non-interactive environment detected, proceeding without confirmation")
     
-    # Reset and apply for real
-    changed_files = set()
-    for fix in fixes:
-        if apply_fix_to_file(fix, applied_fixes, force=args.force, 
-                            max_change_percentage=args.max_change_percentage):
-            changed_files.add(fix['file'])
-    
-    # Generate a summary of the changes
-    print("\nSummary of Applied Fixes:")
-    print(f"- Total fixes analyzed: {len(fixes)}")
-    print(f"- Files modified: {len(changed_files)}")
-    print(f"- Total changes applied: {sum(applied_fixes.values())}")
-    
-    changes_valid = True
-    
-    if changed_files:
-        print("\nModified files:")
-        for file_path in sorted(changed_files):
-            print(f"- {file_path}: {applied_fixes.get(file_path, 0)} fixes")
+    # Incremental mode: apply and validate one fix at a time
+    if args.incremental:
+        print("Using incremental mode: applying and validating fixes one at a time")
         
-        # Validate the changes if requested
-        if not args.no_validation:
-            changes_valid = validate_changes(changed_files, args)
-        
-        # Write the number of changes to a file for GitHub Actions
-        changes_count = len(changed_files)
-        with open('changes_count.txt', 'w') as f:
-            f.write(str(changes_count))
-        
-        # Use the newer GitHub Actions output method
-        if 'GITHUB_OUTPUT' in os.environ:
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                f.write(f"has_changes={changes_count}\n")
-                f.write(f"changes_valid={'true' if changes_valid else 'false'}\n")
+        for fix in fixes:
+            file_path = fix['file']
+            
+            # Apply this fix
+            if apply_fix_to_file(fix, applied_fixes, force=args.force, 
+                               max_change_percentage=args.max_change_percentage):
+                changed_files.add(file_path)
                 
-        if not changes_valid:
-            sys.exit(1)
+                # Validate this specific file
+                if not args.no_validation:
+                    if not validate_single_file(file_path):
+                        print(f"Validation failed for {file_path}, reverting changes")
+                        revert_file(file_path)
+                                                failed_fixes.append(file_path)
+                        continue
+
     else:
-        print("No changes were applied")
-        # Write to changes_count.txt for GitHub Actions
-        with open('changes_count.txt', 'w') as f:
-            f.write("0")
-        
-        # Use the newer GitHub Actions output method
-        if 'GITHUB_OUTPUT' in os.environ:
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                f.write(f"has_changes=0\n")
-                f.write(f"changes_valid=false\n")
+        # Batch mode: Apply all fixes first, then validate
+        print("Applying all fixes in batch mode")
+        for fix in fixes:
+            file_path = fix['file']
+            if apply_fix_to_file(fix, applied_fixes, force=args.force,
+                               max_change_percentage=args.max_change_percentage):
+                changed_files.add(file_path)
+
+        # Validate all changed files
+        if not args.no_validation:
+            print("Validating all modified files")
+            for file_path in changed_files:
+                if not validate_single_file(file_path):
+                    print(f"Validation failed for {file_path}, reverting changes")
+                    revert_file(file_path)
+                    failed_fixes.append(file_path)
+
+    # Validate entire project if necessary
+    if changed_files and not args.no_validation:
+        print("Performing final project-wide validation with cargo check")
+        if not validate_project():
+            print("Project validation failed, reverting all changes")
+            for file_path in changed_files:
+                revert_file(file_path)
+            failed_fixes = list(changed_files)
+
+    # Write results
+    applied_fixes_count = sum(applied_fixes.values())
+    print(f"Successfully applied {applied_fixes_count} fixes")
+    print(f"{len(failed_fixes)} fixes failed or were reverted")
+
+    # Write to changes_count.txt for GitHub Actions
+    with open('changes_count.txt', 'w') as f:
+        f.write(str(applied_fixes_count))
+
+    # Use the newer GitHub Actions output method
+    if 'GITHUB_OUTPUT' in os.environ:
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"has_changes={1 if applied_fixes_count > 0 else 0}\n")
+            f.write(f"changes_valid={1 if len(failed_fixes) == 0 else 0}\n")
+
+    if applied_fixes_count == 0:
+        sys.exit(1)
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
