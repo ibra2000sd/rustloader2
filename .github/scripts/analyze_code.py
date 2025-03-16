@@ -297,7 +297,7 @@ explanation: |
    - Never combine multiple statements into a single line
    - Ensure each fix is syntactically valid Rust code
    - Do NOT remove newlines between function declarations or code blocks
-   - Ensure all braces {}, parentheses (), and brackets [] are properly paired
+   - Ensure all braces {{}}, parentheses (()), and brackets [[]] are properly paired
    - If a line contains complex code, it's better to leave it as-is than risk breaking it
    - Each fix should address a single issue only
 
