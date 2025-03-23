@@ -422,8 +422,7 @@ pub fn secure_delete_file(file_path: &Path) -> Result<(), AppError> {
     // Overwrite file with random data three times
     for _ in 0..3 {
         // Seek to beginning of file
-        file.rewind()
-            .map_err(|e| AppError::IoError(e))?;
+        file.rewind().map_err(|e| AppError::IoError(e))?;
 
         // Fill file with random data
         let mut remaining = file_size;
