@@ -649,7 +649,7 @@ const RustloaderApp = () => {
                       onChange={(e) => setNewUrl(e.target.value)}
                       placeholder="Paste URL here (YouTube, Vimeo, SoundCloud, etc.)"
                       className="flex-grow px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-l-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-                      autoFocus
+                      
                     />
                     <button
                       type="submit"
