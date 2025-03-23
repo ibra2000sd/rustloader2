@@ -168,7 +168,6 @@ const RustloaderApp = () => {
   };
 
   const handleSaveSettings = () => {
-    
     // In a real app, this would save settings to storage
     alert("Settings saved successfully!");
   };
