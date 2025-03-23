@@ -605,7 +605,7 @@ fn extract_video_id(url: &str) -> Option<String> {
         let id_part = parts[1];
         let id_end = id_part
             .find(|c: char| !is_valid_char(c))
-            .map_or(id_part.len(), |pos| pos);
+            .unwrap_or(id_part.len());
 
         let extracted = &id_part[..id_end];
 
