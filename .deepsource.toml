@@ -1,1 +1,74 @@
+# .deepsource.toml
+
+version = 1
+
+# Optional: Paths to exclude from analysis
+exclude_patterns = [
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+  "target/**",           # Rust build directory
+  "**/*.min.js",         # Minified files
+  "vendor/**",
+  ".git/**"
+]
+
+# Optional: Mark test directories or files
+test_patterns = [
+  "tests/**",
+  "**/__tests__/**",
+  "**/*.spec.ts",
+  "**/*.test.ts",
+  "**/*.test.js",
+  "**/*.spec.js"
+]
+
+# Analyzers for each language you're using
+
+[[analyzers]]
+name = "rust"
+enabled = true
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+dependency_file_paths = [
+  "package.json",
+  "yarn.lock",
+  "pnpm-lock.yaml"
+]
+
+[[analyzers]]
+name = "typescript"
+enabled = true
+dependency_file_paths = [
+  "package.json",
+  "yarn.lock",
+  "pnpm-lock.yaml"
+]
+
+[[analyzers]]
+name = "shell"
+enabled = true
+
+[[analyzers]]
+name = "html"
+enabled = true
+
+[[analyzers]]
+name = "css"
+enabled = true
+
+# Transformers (auto-formatters)
+[[transformers]]
+name = "prettier"
+enabled = true
+
+[[transformers]]
+name = "rustfmt"
+enabled = true
+
+[[transformers]]
+name = "shfmt"
+enabled = true
 
