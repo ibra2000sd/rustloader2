@@ -195,7 +195,7 @@ const DownloadManager = () => {
                 'bg-blue-500 dark:bg-blue-600'
               }`}
               style={{ width: `${progress}%` }}
-            ></div>
+             />
           </div>
           <div className="flex justify-between mt-1 text-xs text-gray-500 dark:text-gray-400">
             <span>{formatBytes(downloadedSize)}</span>

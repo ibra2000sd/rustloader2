@@ -56,7 +56,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
         <div 
           className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full transition-all duration-300"
           style={{ width: `${normalizedProgress}%` }} 
-        ></div>
+         />
       </div>
       
       <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 dark:text-gray-400">
