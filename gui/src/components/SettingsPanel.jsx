@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Settings, Save, RefreshCw, FolderOpen, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Save, RefreshCw, FolderOpen, AlertCircle, Bell, BellOff } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 const SettingsPanel = ({ 
   isPro = false,
@@ -21,9 +22,76 @@ const SettingsPanel = ({
   });
   
   const [isExpanded, setIsExpanded] = useState(true);
+  const [notificationsSupported, setNotificationsSupported] = useState(false);
+  const [permissionRequested, setPermissionRequested] = useState(false);
   
-  const handleChange = (e) => {
+  // Check if notifications are supported
+  useEffect(() => {
+    const checkNotificationSupport = async () => {
+      try {
+        const supported = await invoke('are_notifications_supported');
+        setNotificationsSupported(supported);
+        
+        if (!supported) {
+          // If not supported, disable the notification option
+          setSettings(prev => ({
+            ...prev,
+            enableNotifications: false
+          }));
+        }
+      } catch (error) {
+        console.error('Error checking notification support:', error);
+        setNotificationsSupported(false);
+      }
+    };
+    
+    checkNotificationSupport();
+  }, []);
+  
+  const handleChange = async (e) => {
     const { name, value, type, checked } = e.target;
+    
+    // Special handling for notifications
+    if (name === 'enableNotifications') {
+      // If enabling notifications and not previously requested permission
+      if (checked && !permissionRequested && notificationsSupported) {
+        try {
+          // Request permission
+          const granted = await invoke('request_notification_permission');
+          setPermissionRequested(true);
+          
+          if (!granted) {
+            // Permission denied
+            console.log('Notification permission denied');
+            // Update the settings without changing notification preference
+            setSettings(prev => ({
+              ...prev,
+              enableNotifications: false
+            }));
+            // Notify the backend
+            await invoke('toggle_notifications', { enabled: false });
+            return;
+          }
+        } catch (error) {
+          console.error('Error requesting notification permission:', error);
+          // Keep notifications disabled on error
+          setSettings(prev => ({
+            ...prev,
+            enableNotifications: false
+          }));
+          return;
+        }
+      }
+      
+      // Update notification setting in the backend
+      try {
+        await invoke('toggle_notifications', { enabled: checked });
+      } catch (error) {
+        console.error('Error toggling notifications:', error);
+      }
+    }
+    
+    // Update local state
     setSettings({
       ...settings,
       [name]: type === 'checkbox' ? checked : value
@@ -180,10 +248,18 @@ const SettingsPanel = ({
                 name="enableNotifications"
                 checked={settings.enableNotifications}
                 onChange={handleChange}
-                className="h-4 w-4 text-blue-600 dark:text-blue-500 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded"
+                disabled={!notificationsSupported}
+                className={`h-4 w-4 text-blue-600 dark:text-blue-500 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded
+                  ${!notificationsSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
               />
-              <label htmlFor="enableNotifications" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+              <label htmlFor="enableNotifications" className="ml-2 flex items-center gap-1 text-sm text-gray-700 dark:text-gray-300">
+                {settings.enableNotifications ? <Bell size={16} /> : <BellOff size={16} />}
                 Show desktop notifications
+                {!notificationsSupported && (
+                  <span className="ml-2 text-xs text-red-500 dark:text-red-400 italic">
+                    (Not supported in this browser/OS)
+                  </span>
+                )}
               </label>
             </div>
             

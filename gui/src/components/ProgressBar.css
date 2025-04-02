@@ -1,43 +1,128 @@
+/* ProgressBar.css - Optimized for performance */
+
 .progress-container {
-    background-color: var(--card-bg);
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    padding: 1.5rem;
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 1rem;
+  /* CSS containment for performance optimization */
+  contain: layout paint;
+  will-change: transform;
+}
+
+.progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.progress-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70%;
+  margin: 0;
+}
+
+.progress-percentage {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #2563eb;
+}
+
+.progress-track {
+  width: 100%;
+  background-color: #e5e7eb;
+  border-radius: 9999px;
+  height: 0.625rem;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  /* Hardware acceleration for smoother animations */
+  transform: translateZ(0);
+  will-change: contents;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 100%;
+  transition: transform 0.2s ease-out;
+  will-change: transform;
+  /* Start position at -100% (offscreen left) */
+  transform: translateX(-100%);
+}
+
+/* Progress bar status colors */
+.progress-bar-active {
+  background-color: #3b82f6;
+}
+
+.progress-bar-paused {
+  background-color: #f59e0b;
+}
+
+.progress-bar-complete {
+  background-color: #10b981;
+}
+
+.progress-bar-error {
+  background-color: #ef4444;
+}
+
+.progress-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.progress-stat {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.progress-eta {
+  grid-column: span 2;
+}
+
+.progress-label {
+  font-weight: 500;
+}
+
+.progress-complete-message {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #10b981;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .progress-container {
+    background-color: #1f2937;
   }
   
-  .progress-label {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
+  .progress-title {
+    color: #e5e7eb;
   }
   
-  .progress-label span {
-    font-weight: 500;
-  }
-  
-  .progress-percent {
-    font-weight: 600;
-    color: var(--primary-color);
+  .progress-percentage {
+    color: #60a5fa;
   }
   
   .progress-track {
-    height: 20px;
-    background-color: #eee;
-    border-radius: 10px;
-    overflow: hidden;
-    margin-bottom: 0.5rem;
+    background-color: #374151;
   }
   
-  .progress-bar {
-    height: 100%;
-    background-color: var(--primary-color);
-    border-radius: 10px;
-    transition: width 0.3s ease;
+  .progress-stats {
+    color: #9ca3af;
   }
   
-  .progress-status {
-    text-align: center;
-    font-size: 0.9rem;
-    color: var(--light-text);
+  .progress-complete-message {
+    color: #34d399;
   }
+}

@@ -69,12 +69,10 @@ fn get_machine_id() -> Result<String, AppError> {
 
         // Fallback to hostname
         match hostname::get() {
-            Ok(name) => return Ok(name.to_string_lossy().to_string()),
-            Err(_) => {
-                return Err(AppError::General(
-                    "Could not determine machine ID".to_string(),
-                ))
-            }
+            Ok(name) => Ok(name.to_string_lossy().to_string()),
+            Err(_) => Err(AppError::General(
+                "Could not determine machine ID".to_string(),
+            ))
         }
     }
 
@@ -377,10 +375,7 @@ pub fn load_license() -> Result<LicenseStatus, AppError> {
 
 // Check if the current installation is Pro
 pub fn is_pro_version() -> bool {
-    match load_license() {
-        Ok(LicenseStatus::Pro(_)) => true,
-        _ => false,
-    }
+    matches!(load_license(), Ok(LicenseStatus::Pro(_)))
 }
 
 // Activate a license key

@@ -2,11 +2,129 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#3498db" />
     <meta name="description" content="Rustloader - Advanced Video Downloader built with Rust and React" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <!-- High DPI support -->
+    <meta name="msapplication-TileColor" content="#3498db" />
+    <meta name="msapplication-config" content="/icons/browserconfig.xml" />
+    <meta name="format-detection" content="telephone=no" />
     <title>Rustloader</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/180x180.png" />
+    
+    <!-- Preload critical assets -->
+    <link rel="preload" href="/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Inter-Medium.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin />
+    
+    <!-- Ensure high DPI display support with proper scaling -->
+    <style>
+      /* Base font settings optimized for readability on all displays */
+      :root {
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+        font-size: 16px;
+      }
+      
+      /* High DPI optimizations */
+      @media (-webkit-min-device-pixel-ratio: 1.5), (min-resolution: 144dpi) {
+        :root {
+          font-size: 14px; /* Slightly smaller base font size for high DPI displays */
+        }
+      }
+      
+      @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+        :root {
+          font-size: 13px; /* Further adjustment for very high DPI displays */
+        }
+      }
+      
+      /* Font faces with proper formats for all browsers */
+      @font-face {
+        font-family: 'Inter';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('/fonts/Inter-Regular.woff2') format('woff2');
+      }
+      
+      @font-face {
+        font-family: 'Inter';
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url('/fonts/Inter-Medium.woff2') format('woff2');
+      }
+      
+      @font-face {
+        font-family: 'Inter';
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+      }
+      
+      html, body {
+        margin: 0;
+        padding: 0;
+        font-family: var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+      }
+      
+      /* Ensures proper scaling of the root element */
+      #root {
+        height: 100%;
+        width: 100%;
+        overflow: auto;
+      }
+      
+      /* Improves rendering performance */
+      * {
+        box-sizing: border-box;
+      }
+      
+      /* Improve scrolling performance */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      
+      ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.05);
+      }
+      
+      ::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 4px;
+      }
+      
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 0, 0, 0.3);
+      }
+      
+      /* Dark mode scrollbar adjustments */
+      @media (prefers-color-scheme: dark) {
+        ::-webkit-scrollbar-track {
+          background: rgba(255, 255, 255, 0.05);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.2);
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

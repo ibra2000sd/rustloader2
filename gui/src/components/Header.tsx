@@ -1,6 +1,6 @@
 // src/components/Header.tsx
 import React from 'react';
-import { LicenseStatus } from '../App';
+import { LicenseStatus } from '../App.jsx';
 
 interface HeaderProps {
   licenseStatus: LicenseStatus;

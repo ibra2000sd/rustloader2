@@ -44,6 +44,11 @@ serde_json = "1.0"      # For JSON handling
 semver = "1.0"          # For version comparison
 hostname = "0.3"        # For machine identification
 
+# Logging framework
+log = "0.4"             # Logging facade
+env_logger = "0.10"     # Environment-based logger implementation
+# chrono is already included above with the same features
+
 # Platform-specific dependencies
 [target.'cfg(windows)'.dependencies]
 winreg = "0.51"         # For Windows registry access

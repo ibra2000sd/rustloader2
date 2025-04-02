@@ -4,6 +4,26 @@ use std::time::{Duration, Instant};
 use serde::{Serialize, Deserialize};
 use once_cell::sync::Lazy;
 
+// Make modules accessible in tests
+pub mod cli;
+pub mod dependency_validator;
+pub mod downloader;
+pub mod download_manager;
+pub mod error;
+pub mod license;
+pub mod security;
+pub mod utils;
+pub mod version;
+
+// Re-export download manager types for easier use
+pub use crate::download_manager::{
+    DownloadItem, DownloadPriority, DownloadQueue, DownloadStatus, 
+    add_download_to_queue, pause_all_downloads, resume_all_downloads,
+    pause_download, resume_download, cancel_download, 
+    set_download_priority, get_all_downloads, get_download_status,
+    shutdown_download_manager,
+};
+
 // Progress tracking state using atomics for thread safety
 static DOWNLOAD_PROGRESS: Lazy<ProgressState> = Lazy::new(|| {
     ProgressState {

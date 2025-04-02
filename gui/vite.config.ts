@@ -18,6 +18,14 @@ export default defineConfig({
     target: 'esnext',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    rollupOptions: {
+      external: [
+        '@tauri-apps/api/core',
+        '@tauri-apps/api',
+        '@tauri-apps/plugin-store',
+        '@tauri-apps/plugin-dialog'
+      ]
+    }
   },
   // Add path aliasing for improved imports
   resolve: {

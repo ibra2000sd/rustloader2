@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Link, Home, User, AlertCircle, Play, Pause, Download, CheckCircle, XCircle, Clock, RefreshCw, Save, FolderOpen, Settings } from 'lucide-react';
+import { Link, Home, User, AlertCircle, Play, Pause, Download, CheckCircle, XCircle, Clock, RefreshCw, Save, FolderOpen, Settings, Info, HelpCircle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { Store } from '@tauri-apps/plugin-store';
+
+// Import our enhanced components
+import OnboardingTutorial from './OnboardingTutorial';
+import Tooltip from './Tooltip';
+import ErrorHandler from './ErrorHandler';
+import HelpCenter from './HelpCenter';
+import FeatureTour from './FeatureTour';
 
 // Standalone component that doesn't rely on external imports
 const RustloaderApp = () => {
@@ -10,6 +19,14 @@ const RustloaderApp = () => {
   const [showProBanner, setShowProBanner] = useState(true);
   const [isAddingUrl, setIsAddingUrl] = useState(false);
   const [newUrl, setNewUrl] = useState('');
+  
+  // First-run experience state
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showFeatureTour, setShowFeatureTour] = useState(false);
+  const [currentTour, setCurrentTour] = useState('main');
+  const [appError, setAppError] = useState('');
+  const [isFirstRun, setIsFirstRun] = useState(true);
+  const [helpExpanded, setHelpExpanded] = useState(false);
   
   // Settings state for the embedded settings panel
   const [settings, setSettings] = useState({
@@ -22,6 +39,54 @@ const RustloaderApp = () => {
     downloadSubtitles: false,
     theme: 'system',
   });
+
+  // Check for first run and show onboarding
+  useEffect(() => {
+    const checkFirstRun = async () => {
+      try {
+        // Initialize preferences store
+        const store = new Store('preferences.dat');
+        await store.load();
+        
+        // Check if this is the first run
+        const hasCompletedOnboarding = await store.get('showOnboarding');
+        
+        if (hasCompletedOnboarding === undefined || hasCompletedOnboarding === true) {
+          // This is the first run or onboarding is enabled
+          setShowOnboarding(true);
+          setIsFirstRun(true);
+        } else {
+          setIsFirstRun(false);
+        }
+      } catch (error) {
+        console.error('Failed to check first run state:', error);
+        // Default to showing onboarding if we can't determine the state
+        setShowOnboarding(true);
+      }
+    };
+    
+    checkFirstRun();
+  }, []);
+
+  // Start the feature tour after completing onboarding
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+    // After a short delay, show the feature tour
+    setTimeout(() => {
+      setCurrentTour('main');
+      setShowFeatureTour(true);
+    }, 1000);
+  };
+
+  // Skip both onboarding and feature tour
+  const handleOnboardingSkip = () => {
+    setShowOnboarding(false);
+  };
+
+  // Handle feature tour completion
+  const handleFeatureTourComplete = () => {
+    setShowFeatureTour(false);
+  };
 
   // Simulated download progress update
   useEffect(() => {
@@ -120,9 +185,29 @@ const RustloaderApp = () => {
 
   const handleSubmitUrl = (e) => {
     e.preventDefault();
-    if (!newUrl.trim()) return;
+    if (!newUrl.trim()) {
+      setAppError('Please enter a URL to download');
+      return;
+    }
     
-    startDownload(newUrl);
+    // Validate URL
+    try {
+      const url = new URL(newUrl);
+      
+      // Check for supported domains
+      const supportedDomains = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'soundcloud.com'];
+      const isSupported = supportedDomains.some(domain => url.hostname.includes(domain));
+      
+      if (!isSupported) {
+        setAppError(`This URL may not be supported. We support YouTube, Vimeo, and other popular platforms. Continue anyway?`);
+        // For demo purposes, we'll still allow the download
+        startDownload(newUrl);
+      } else {
+        startDownload(newUrl);
+      }
+    } catch (error) {
+      setAppError('Invalid URL. Please enter a valid web address.');
+    }
   };
 
   const handlePauseResume = (id) => {
@@ -542,9 +627,26 @@ const RustloaderApp = () => {
                 </button>
               )}
               
-              <button className="p-2 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300">
-                <User size={20} />
-              </button>
+              <Tooltip 
+                content="Access your account settings and license information"
+                position="bottom"
+              >
+                <button className="p-2 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300">
+                  <User size={20} />
+                </button>
+              </Tooltip>
+              
+              <Tooltip
+                content="Open the quick help guide"
+                position="bottom"
+              >
+                <button
+                  className="p-2 ml-2 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                  onClick={() => setShowOnboarding(true)}
+                >
+                  <HelpCircle size={20} />
+                </button>
+              </Tooltip>
             </div>
           </div>
         </div>
@@ -552,6 +654,23 @@ const RustloaderApp = () => {
       
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Error Message */}
+        {appError && (
+          <div className="mb-6">
+            <ErrorHandler
+              error={appError}
+              onDismiss={() => setAppError('')}
+              actions={[
+                {
+                  label: 'Dismiss',
+                  action: () => setAppError(''),
+                  primary: true
+                }
+              ]}
+            />
+          </div>
+        )}
+        
         {/* Pro Version Banner */}
         {!isPro && showProBanner && (
           <div className="mb-6 p-4 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg shadow-md text-white relative">
@@ -596,6 +715,7 @@ const RustloaderApp = () => {
                     ? 'border-blue-500 text-blue-600 dark:text-blue-400' 
                     : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
                 }`}
+                id="downloads-tab"
               >
                 <div className="flex items-center">
                   <Home size={16} className="mr-2" />
@@ -610,6 +730,7 @@ const RustloaderApp = () => {
                     ? 'border-blue-500 text-blue-600 dark:text-blue-400' 
                     : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
                 }`}
+                id="settings-tab"
               >
                 <div className="flex items-center">
                   <Settings size={16} className="mr-2" />
@@ -618,12 +739,16 @@ const RustloaderApp = () => {
               </button>
               
               <button
-                onClick={() => setActiveTab('help')}
+                onClick={() => {
+                  setActiveTab('help');
+                  setHelpExpanded(true);
+                }}
                 className={`py-2 px-1 border-b-2 font-medium text-sm ${
                   activeTab === 'help' 
                     ? 'border-blue-500 text-blue-600 dark:text-blue-400' 
                     : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
                 }`}
+                id="help-tab"
               >
                 <div className="flex items-center">
                   <Link size={16} className="mr-2" />
@@ -650,13 +775,20 @@ const RustloaderApp = () => {
                       placeholder="Paste URL here (YouTube, Vimeo, SoundCloud, etc.)"
                       className="flex-grow px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-l-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
                       autoFocus
+                      id="url-input-field"
                     />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-r-md hover:bg-blue-700"
+                    <Tooltip
+                      content="Start downloading the video or audio from this URL"
+                      position="bottom"
                     >
-                      Download
-                    </button>
+                      <button
+                        type="submit"
+                        className="px-4 py-2 bg-blue-600 text-white rounded-r-md hover:bg-blue-700"
+                        id="download-button"
+                      >
+                        Download
+                      </button>
+                    </Tooltip>
                   </form>
                 ) : (
                   <button
@@ -669,8 +801,57 @@ const RustloaderApp = () => {
                 )}
               </div>
               
+              {/* Format and Quality Selection (visible when isFirstRun and no downloads to guide user) */}
+              {isFirstRun && downloads.length === 0 && (
+                <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <h3 className="text-blue-800 dark:text-blue-300 font-medium mb-2">Quick Settings</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-blue-700 dark:text-blue-300 mb-1">
+                        Format
+                        <Tooltip 
+                          content="Select MP4/WebM for video or MP3/M4A for audio only"
+                          position="right"
+                          icon={true}
+                          className="ml-1"
+                        />
+                      </label>
+                      <select 
+                        className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100"
+                        id="format-selector"
+                      >
+                        <option value="mp4">MP4 Video</option>
+                        <option value="webm">WebM Video</option>
+                        <option value="mp3">MP3 Audio</option>
+                        <option value="m4a">M4A Audio</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-blue-700 dark:text-blue-300 mb-1">
+                        Quality
+                        <Tooltip 
+                          content="Higher quality means larger file size and longer download time"
+                          position="right"
+                          icon={true}
+                          className="ml-1"
+                        />
+                      </label>
+                      <select 
+                        className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-md bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100"
+                        id="quality-selector"
+                      >
+                        <option value="best">Best</option>
+                        <option value="720p">720p</option>
+                        <option value="480p">480p</option>
+                        <option value="360p">360p</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {/* Downloads List */}
-              <div className="space-y-6">
+              <div className="space-y-6" id="downloads-list">
                 {downloads.length === 0 ? (
                   <div>
                     <div className="text-center p-8 bg-gray-50 dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
@@ -728,62 +909,7 @@ const RustloaderApp = () => {
           
           {/* Help Tab */}
           {activeTab === 'help' && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
-              <div className="p-4 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
-                <h2 className="font-medium text-gray-800 dark:text-gray-200">Help & Resources</h2>
-              </div>
-              
-              <div className="p-4 space-y-4">
-                <div className="space-y-2">
-                  <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200">Quick Start Guide</h3>
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Rustloader makes it easy to download videos and audio from various platforms:
-                  </p>
-                  <ol className="list-decimal list-inside text-gray-600 dark:text-gray-400 pl-4 space-y-1">
-                    <li>Paste a URL in the download box</li>
-                    <li>Select your preferred format and quality (if needed)</li>
-                    <li>Click Download</li>
-                    <li>Your download will start automatically</li>
-                  </ol>
-                </div>
-                
-                <div className="space-y-2">
-                  <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200">Supported Platforms</h3>
-                  <ul className="list-disc list-inside text-gray-600 dark:text-gray-400 pl-4 grid grid-cols-2 md:grid-cols-3">
-                    <li>YouTube</li>
-                    <li>Vimeo</li>
-                    <li>SoundCloud</li>
-                    <li>Dailymotion</li>
-                    <li>Facebook</li>
-                    <li>Twitter</li>
-                    <li>Instagram</li>
-                    <li>TikTok</li>
-                    <li>And many more!</li>
-                  </ul>
-                </div>
-                
-                <div className="space-y-2">
-                  <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200">Troubleshooting</h3>
-                  <div className="space-y-2">
-                    <p className="text-gray-600 dark:text-gray-400">
-                      <strong>Download fails immediately:</strong> Check your internet connection or try a different URL.
-                    </p>
-                    <p className="text-gray-600 dark:text-gray-400">
-                      <strong>Slow download speeds:</strong> Try pausing and resuming the download, or check your internet connection.
-                    </p>
-                    <p className="text-gray-600 dark:text-gray-400">
-                      <strong>Format not available:</strong> Some formats/qualities may not be available for certain videos.
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="text-center pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Need more help? Check our <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline">documentation</a> or <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline">contact support</a>.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <HelpCenter />
           )}
         </div>
       </main>
@@ -809,6 +935,23 @@ const RustloaderApp = () => {
           </div>
         </div>
       </footer>
+      
+      {/* Onboarding Tutorial Modal */}
+      {showOnboarding && (
+        <OnboardingTutorial
+          onComplete={handleOnboardingComplete}
+          onSkip={handleOnboardingSkip}
+        />
+      )}
+      
+      {/* Feature Tour */}
+      {showFeatureTour && (
+        <FeatureTour
+          onComplete={handleFeatureTourComplete}
+          onSkip={handleFeatureTourComplete}
+          featureKey={currentTour}
+        />
+      )}
     </div>
   );
 };

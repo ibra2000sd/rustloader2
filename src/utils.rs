@@ -55,7 +55,7 @@ pub fn is_dependency_installed(name: &str) -> Result<bool, AppError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     Ok(output.success())
 }
@@ -66,7 +66,7 @@ pub fn get_dependency_version(name: &str) -> Result<String, AppError> {
     let output = ShellCommand::new(name)
         .arg("--version")
         .output()
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     if !output.status.success() {
         return Err(AppError::General(format!("Failed to get {} version", name)));
@@ -89,7 +89,7 @@ pub fn is_ytdlp_updated() -> Result<bool, AppError> {
     let output = ShellCommand::new("yt-dlp")
         .arg("--update")
         .output()
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     let output_str = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(output_str.contains("is up to date") || output_str.contains("Updated"))
@@ -102,7 +102,7 @@ pub fn update_ytdlp() -> Result<(), AppError> {
     let output = ShellCommand::new("yt-dlp")
         .arg("--update")
         .status()
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     if output.success() {
         println!("{}", "yt-dlp updated successfully.".green());
@@ -166,7 +166,7 @@ pub fn install_ffmpeg() -> Result<(), AppError> {
             .arg("install")
             .arg("ffmpeg")
             .status()
-            .map_err(|e| AppError::IoError(e))?;
+            .map_err(AppError::IoError)?;
 
         if status.success() {
             println!("{}", "ffmpeg installed successfully.".green());
@@ -187,7 +187,7 @@ pub fn install_ffmpeg() -> Result<(), AppError> {
             .arg("-y")
             .arg("ffmpeg")
             .status()
-            .map_err(|e| AppError::IoError(e))?;
+            .map_err(AppError::IoError)?;
 
         if status.success() {
             println!("{}", "ffmpeg installed successfully.".green());
@@ -534,7 +534,7 @@ impl TrustedKeys {
         let mut key_expiry = std::collections::HashMap::new();
         let expiry_time = chrono::Utc::now()
             .checked_add_signed(chrono::Duration::days(180))
-            .unwrap_or_else(|| chrono::Utc::now())
+            .unwrap_or_else(chrono::Utc::now)
             .timestamp();
         key_expiry.insert("rustloader-release-key-1".to_string(), expiry_time);
 
@@ -595,7 +595,7 @@ fn verify_release_signature(
         Ok(bytes) => bytes,
         Err(_) => return Ok(false),
     };
-    match verify_signature(&data_json.as_bytes(), &signature_bytes, public_key) {
+    match verify_signature(data_json.as_bytes(), &signature_bytes, public_key) {
         Ok(valid) => Ok(valid),
         Err(_) => Ok(false),
     }
@@ -611,7 +611,7 @@ fn verify_signature(data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<
 }
 
 pub async fn check_for_updates() -> Result<bool, AppError> {
-    let current_version = match Version::parse(crate::VERSION) {
+    let current_version = match Version::parse(crate::version::VERSION) {
         Ok(v) => v,
         Err(_) => {
             return Err(AppError::General(
@@ -628,7 +628,7 @@ pub async fn check_for_updates() -> Result<bool, AppError> {
     let url = "https://api.rustloader.com/releases/latest";
     let response = match client
         .get(url)
-        .header("User-Agent", format!("rustloader/{}", crate::VERSION))
+        .header("User-Agent", format!("rustloader/{}", crate::version::VERSION))
         .send()
         .await
     {

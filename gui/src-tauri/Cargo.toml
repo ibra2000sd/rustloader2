@@ -21,7 +21,12 @@ tauri-build = { version = "2.0.5", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.3.1", features = [] }
-tauri-plugin-log = "2.0.0-rc"
+tauri = { version = "2.3.1", features = ["unstable"] }
+tauri-plugin-log = "2.0.0"
+tauri-plugin-dialog = "2.0.0"
+tauri-plugin-store = "2.0.0"
 dirs-next = "2.0.0"
 rustloader = { path = "../.." }
+futures = "0.3"
+tokio = { version = "1.32", features = ["sync", "rt", "macros", "time"] }
+uuid = { version = "1.4", features = ["v4", "serde"] }

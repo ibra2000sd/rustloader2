@@ -41,7 +41,7 @@ pub const SENSITIVE_DIRECTORIES: [&str; 12] = [
 
 // Initialize the secure random number generator and rate limits using once_cell
 #[allow(dead_code)]
-static SECURE_RNG: Lazy<SystemRandom> = Lazy::new(|| SystemRandom::new());
+static SECURE_RNG: Lazy<SystemRandom> = Lazy::new(SystemRandom::new);
 static RATE_LIMITS: Lazy<Mutex<HashMap<String, Vec<Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -84,7 +84,7 @@ pub fn apply_rate_limit(operation: &str, max_attempts: usize, window: Duration) 
     let mut limits = RATE_LIMITS.lock().unwrap();
 
     // Get or create the entry for this operation
-    let attempts = limits.entry(operation.to_string()).or_insert_with(Vec::new);
+    let attempts = limits.entry(operation.to_string()).or_default();
 
     // Remove attempts outside the time window
     attempts.retain(|time| now.duration_since(*time) < window);
@@ -157,11 +157,24 @@ pub fn validate_path_safety(path: &Path) -> Result<(), AppError> {
     let path_str = canonical_path.to_string_lossy().to_string();
 
     // Check if path is within allowed directories
-    let allowed_paths = [
+    let mut allowed_paths = vec![
         canonical_home.to_string_lossy().to_string(),
         "/tmp".to_string(),
         "/var/tmp".to_string(),
     ];
+    
+    // Add system temp directory
+    if let Ok(temp_dir) = std::env::temp_dir().canonicalize() {
+        allowed_paths.push(temp_dir.to_string_lossy().to_string());
+    }
+    
+    // On macOS, the temp directory might be in a different location
+    #[cfg(target_os = "macos")]
+    {
+        allowed_paths.push("/private/tmp".to_string());
+        allowed_paths.push("/private/var/tmp".to_string());
+        allowed_paths.push("/private/var/folders".to_string());
+    }
 
     let in_allowed_path = allowed_paths
         .iter()
@@ -215,7 +228,7 @@ fn verify_application_integrity() -> Result<(), AppError> {
     // against known good values
 
     // For demonstration purposes, just check if the binary exists
-    let exe_path = std::env::current_exe().map_err(|e| AppError::IoError(e))?;
+    let exe_path = std::env::current_exe().map_err(AppError::IoError)?;
 
     if !exe_path.exists() {
         return Err(AppError::SecurityViolation);
@@ -235,7 +248,7 @@ fn set_process_limits() -> Result<(), AppError> {
         .arg("-n")
         .arg("1024") // File descriptor limit
         .status()
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     Ok(())
 }
@@ -383,12 +396,12 @@ pub fn verify_file_integrity(file_path: &Path, expected_hash: &str) -> Result<bo
     use std::fs::File;
     use std::io::Read;
 
-    let mut file = File::open(file_path).map_err(|e| AppError::IoError(e))?;
+    let mut file = File::open(file_path).map_err(AppError::IoError)?;
     let mut context = Context::new(&SHA256);
     let mut buffer = [0; 8192];
 
     loop {
-        let count = file.read(&mut buffer).map_err(|e| AppError::IoError(e))?;
+        let count = file.read(&mut buffer).map_err(AppError::IoError)?;
         if count == 0 {
             break;
         }
@@ -411,10 +424,10 @@ pub fn secure_delete_file(file_path: &Path) -> Result<(), AppError> {
     let mut file = OpenOptions::new()
         .write(true)
         .open(file_path)
-        .map_err(|e| AppError::IoError(e))?;
+        .map_err(AppError::IoError)?;
 
     // Get file size
-    let file_size = file.metadata().map_err(|e| AppError::IoError(e))?.len() as usize;
+    let file_size = file.metadata().map_err(AppError::IoError)?.len() as usize;
 
     // Generate random data
     let mut buffer = vec![0u8; std::cmp::min(8192, file_size)];
@@ -423,7 +436,7 @@ pub fn secure_delete_file(file_path: &Path) -> Result<(), AppError> {
     for _ in 0..3 {
         // Seek to beginning of file
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| AppError::IoError(e))?;
+            .map_err(AppError::IoError)?;
 
         // Fill file with random data
         let mut remaining = file_size;
@@ -434,20 +447,20 @@ pub fn secure_delete_file(file_path: &Path) -> Result<(), AppError> {
                 .map_err(|_| AppError::SecurityViolation)?;
 
             file.write_all(&buffer[..chunk_size])
-                .map_err(|e| AppError::IoError(e))?;
+                .map_err(AppError::IoError)?;
 
             remaining -= chunk_size;
         }
 
         // Flush to ensure write
-        file.flush().map_err(|e| AppError::IoError(e))?;
+        file.flush().map_err(AppError::IoError)?;
     }
 
     // Close the file
     drop(file);
 
     // Remove the file
-    remove_file(file_path).map_err(|e| AppError::IoError(e))?;
+    remove_file(file_path).map_err(AppError::IoError)?;
 
     Ok(())
 }

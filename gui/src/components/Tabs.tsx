@@ -1,6 +1,6 @@
 // src/components/Tabs.tsx
 import React from 'react';
-import { TabType } from '../App';
+import { TabType } from '../App.jsx';
 
 interface TabsProps {
   activeTab: TabType;

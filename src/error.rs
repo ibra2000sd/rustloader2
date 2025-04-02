@@ -2,8 +2,45 @@
 
 use reqwest::Error as ReqwestError;
 use serde_json::Error as SerdeError;
+use std::fmt;
 use std::io;
 use thiserror::Error;
+
+/// Types of network errors that can occur during downloads
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkErrorKind {
+    /// Connection was interrupted unexpectedly
+    ConnectionInterrupted,
+    /// Connection timed out waiting for response
+    Timeout,
+    /// Server returned an error status code
+    ServerError(u16),
+    /// DNS resolution failed
+    DnsResolutionFailure,
+    /// Local network connectivity issues
+    ConnectivityIssue,
+    /// Rate limiting or throttling by the server
+    RateLimited,
+    /// Content no longer available
+    ContentUnavailable,
+    /// Generic network error
+    Other,
+}
+
+impl fmt::Display for NetworkErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ConnectionInterrupted => write!(f, "Connection interrupted"),
+            Self::Timeout => write!(f, "Connection timeout"),
+            Self::ServerError(code) => write!(f, "Server error {}", code),
+            Self::DnsResolutionFailure => write!(f, "DNS resolution failure"),
+            Self::ConnectivityIssue => write!(f, "Connectivity issue"),
+            Self::RateLimited => write!(f, "Rate limited by server"),
+            Self::ContentUnavailable => write!(f, "Content unavailable"),
+            Self::Other => write!(f, "Other network error"),
+        }
+    }
+}
 
 /// Custom error types for the application
 #[derive(Error, Debug)]
@@ -65,6 +102,14 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("Parse error: {0}")]
     ParseError(String),
+    
+    /// Network-related errors with detailed diagnostic information
+    #[error("Network error: {kind} - {message}")]
+    NetworkError {
+        kind: NetworkErrorKind,
+        message: String,
+        retriable: bool,
+    },
 }
 
 /// Convert a string error to AppError::General
