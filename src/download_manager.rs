@@ -1453,11 +1453,7 @@ async fn execute_download(
             match result {
                 Ok(download_result) => {
                     match download_result {
-                        Ok(_) => {
-                            // TODO: Get actual output path
-                            let output_path = format!("downloaded/{}.{}", id, output_format);
-                            Ok(output_path)
-                        },
+                        Ok(path) => Ok(path),
                         Err(e) => Err(e)
                     }
                 },
