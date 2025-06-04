@@ -58,7 +58,6 @@ Rustloader is a powerful, versatile command-line tool for downloading videos and
 
 ## Installation
 
-## Installation
 
 ### Method 1: Automatic Installation Script (Recommended)
 
