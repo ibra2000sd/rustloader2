@@ -589,9 +589,9 @@ async fn main() -> Result<(), AppError> {
         )
         .await
         {
-            Ok(_) => {
-                info!("Download process completed successfully");
-                println!("{}", "Process completed successfully.".green());
+            Ok(path) => {
+                info!("Download completed successfully: {}", path);
+                println!("{} {}", "Process completed successfully. File saved at".green(), path);
             },
             Err(AppError::DailyLimitExceeded) => {
                 error!("Daily download limit exceeded for free version");

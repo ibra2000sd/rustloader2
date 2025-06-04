@@ -1107,7 +1107,7 @@ pub async fn download_video_free(
     output_dir: Option<&String>,
     force_download: bool,
     bitrate: Option<&String>,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     validate_url(url)?;
     
     if let Some(start) = start_time {
@@ -1147,7 +1147,7 @@ pub async fn download_video_free(
 
                     if !prompt_for_redownload()? {
                         println!("{}", "Download cancelled.".green());
-                        return Ok(());
+                        return Ok(existing_file.to_string_lossy().into_owned());
                     }
 
                     should_use_unique_filename = true;
@@ -1636,5 +1636,5 @@ pub async fn download_video_free(
     println!("{} {} {}", "Download completed successfully.".green(), format.to_uppercase(), "file saved.".green());
     println!("\n{}\n", promo.get_random_completion_message().bright_yellow());
 
-    Ok(())
+    Ok(output_path)
 }
