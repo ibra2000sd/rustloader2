@@ -8,6 +8,7 @@ pub fn build_cli() -> Command {
         .version("1.0.0")
         .author("Ibrahim Mohamed")
         .about("Advanced video downloader for various content sources")
+        .subcommand_negates_reqs(true)
         .subcommand(
             Command::new("download")
                 .about("Download a video or audio")

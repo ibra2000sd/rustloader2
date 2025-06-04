@@ -156,3 +156,23 @@ fn test_cli_invalid_arguments() {
     ]);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_cli_queue_list_subcommand() {
+    let app = build_cli();
+
+    // Parse the queue list subcommand
+    let result = app.clone().try_get_matches_from(vec!["rustloader", "queue", "list"]);
+    assert!(result.is_ok());
+    let matches = result.unwrap();
+
+    match matches.subcommand() {
+        Some(("queue", queue_matches)) => {
+            match queue_matches.subcommand() {
+                Some(("list", _)) => {},
+                other => panic!("Expected 'list' subcommand, got {:?}", other),
+            }
+        }
+        other => panic!("Expected 'queue' subcommand, got {:?}", other),
+    }
+}
