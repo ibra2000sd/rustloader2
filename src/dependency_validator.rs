@@ -346,32 +346,32 @@ fn get_dependency_path(name: &str) -> Result<String, AppError> {
         #[cfg(target_os = "linux")]
         {
             // Define a comprehensive set of Linux package managers and their query commands
-            let package_manager_queries = [
+            let package_manager_queries: Vec<(&str, Vec<&str>, &str)> = vec![
                 // Debian/Ubuntu family
-                ("dpkg", &["-L", "ffmpeg"], r"/bin/ffmpeg$"),
-                ("dpkg", &["-L", "ffmpeg-static"], r"/bin/ffmpeg$"),
-                ("apt-file", &["list", "ffmpeg"], r"/bin/ffmpeg$"),
-                
+                ("dpkg", vec!["-L", "ffmpeg"], r"/bin/ffmpeg$"),
+                ("dpkg", vec!["-L", "ffmpeg-static"], r"/bin/ffmpeg$"),
+                ("apt-file", vec!["list", "ffmpeg"], r"/bin/ffmpeg$"),
+
                 // Red Hat/Fedora family
-                ("rpm", &["-ql", "ffmpeg"], r"/bin/ffmpeg$"),
-                ("rpm", &["-ql", "ffmpeg-static"], r"/bin/ffmpeg$"),
-                ("dnf", &["repoquery", "-l", "ffmpeg"], r"/bin/ffmpeg$"),
-                
+                ("rpm", vec!["-ql", "ffmpeg"], r"/bin/ffmpeg$"),
+                ("rpm", vec!["-ql", "ffmpeg-static"], r"/bin/ffmpeg$"),
+                ("dnf", vec!["repoquery", "-l", "ffmpeg"], r"/bin/ffmpeg$"),
+
                 // Arch Linux
-                ("pacman", &["-Ql", "ffmpeg"], r"/bin/ffmpeg$"),
-                ("pacman", &["-Qo", "/usr/bin/ffmpeg"], r".*is owned by ffmpeg.*"),
-                
+                ("pacman", vec!["-Ql", "ffmpeg"], r"/bin/ffmpeg$"),
+                ("pacman", vec!["-Qo", "/usr/bin/ffmpeg"], r".*is owned by ffmpeg.*"),
+
                 // SUSE
-                ("rpm", &["-ql", "ffmpeg"], r"/bin/ffmpeg$"),
-                ("zypper", &["se", "-i", "ffmpeg"], r".*ffmpeg.*"),
-                
+                ("rpm", vec!["-ql", "ffmpeg"], r"/bin/ffmpeg$"),
+                ("zypper", vec!["se", "-i", "ffmpeg"], r".*ffmpeg.*"),
+
                 // Container package managers
-                ("flatpak", &["info", "org.ffmpeg.FFmpeg"], r".*"),
-                ("snap", &["info", "ffmpeg"], r".*"),
-                
+                ("flatpak", vec!["info", "org.ffmpeg.FFmpeg"], r".*"),
+                ("snap", vec!["info", "ffmpeg"], r".*"),
+
                 // Universal package managers
-                ("which", &["ffmpeg"], r".*"),
-                ("type", &["-p", "ffmpeg"], r".*"),
+                ("which", vec!["ffmpeg"], r".*"),
+                ("type", vec!["-p", "ffmpeg"], r".*"),
             ];
             
             // Store detected distro and version for more intelligent fallbacks
@@ -398,10 +398,10 @@ fn get_dependency_path(name: &str) -> Result<String, AppError> {
             // Try all package managers, but prioritize those matching the detected distro family
             let mut matching_paths = Vec::new();
             
-            for (pkg_cmd, args, path_pattern) in &package_manager_queries {
+            for (pkg_cmd, args, path_pattern) in package_manager_queries.iter() {
                 if Command::new(pkg_cmd).arg("--version").output().is_ok() {
                     debug!("Found package manager: {}", pkg_cmd);
-                    
+
                     if let Ok(output) = Command::new(pkg_cmd).args(args).output() {
                         if output.status.success() {
                             let output_str = String::from_utf8_lossy(&output.stdout);
@@ -480,28 +480,28 @@ fn get_dependency_path(name: &str) -> Result<String, AppError> {
             
             // Additional fallback: Try package manager to verify installation status
             // This helps provide better diagnostics
-            let package_status_checks = match detected_distro_family {
+            let package_status_checks: Vec<(&str, Vec<&str>, &str)> = match detected_distro_family {
                 "debian" => vec![
-                    ("dpkg", &["-l", "ffmpeg"], "Check if ffmpeg is installed"),
-                    ("apt", &["policy", "ffmpeg"], "Check available versions"),
+                    ("dpkg", vec!["-l", "ffmpeg"], "Check if ffmpeg is installed"),
+                    ("apt", vec!["policy", "ffmpeg"], "Check available versions"),
                 ],
                 "fedora" => vec![
-                    ("rpm", &["-q", "ffmpeg"], "Check if ffmpeg is installed"),
-                    ("dnf", &["list", "installed", "ffmpeg"], "Check installed version"),
+                    ("rpm", vec!["-q", "ffmpeg"], "Check if ffmpeg is installed"),
+                    ("dnf", vec!["list", "installed", "ffmpeg"], "Check installed version"),
                 ],
                 "arch" => vec![
-                    ("pacman", &["-Q", "ffmpeg"], "Check if ffmpeg is installed"),
+                    ("pacman", vec!["-Q", "ffmpeg"], "Check if ffmpeg is installed"),
                 ],
                 "suse" => vec![
-                    ("zypper", &["se", "-i", "ffmpeg"], "Check if ffmpeg is installed"),
-                    ("rpm", &["-q", "ffmpeg"], "Check if ffmpeg is installed"),
+                    ("zypper", vec!["se", "-i", "ffmpeg"], "Check if ffmpeg is installed"),
+                    ("rpm", vec!["-q", "ffmpeg"], "Check if ffmpeg is installed"),
                 ],
                 _ => vec![],
             };
             
             for (cmd, args, purpose) in package_status_checks {
                 if Command::new(cmd).arg("--version").output().is_ok() {
-                    if let Ok(output) = Command::new(cmd).args(args).output() {
+                    if let Ok(output) = Command::new(cmd).args(&args).output() {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         
@@ -1312,17 +1312,17 @@ fn install_ytdlp() -> Result<(), AppError> {
         // Platform-specific package managers
         #[cfg(target_os = "linux")]
         {
-            let package_managers = [
+            let package_managers: Vec<(&str, Vec<&str>)> = vec![
                 // Try official package repositories first
-                ("apt", &["install", "-y", "yt-dlp"]),
-                ("apt-get", &["install", "-y", "yt-dlp"]),
-                ("dnf", &["install", "-y", "yt-dlp"]),
-                ("pacman", &["-S", "--noconfirm", "yt-dlp"]),
-                ("zypper", &["install", "-y", "yt-dlp"]),
-                
+                ("apt", vec!["install", "-y", "yt-dlp"]),
+                ("apt-get", vec!["install", "-y", "yt-dlp"]),
+                ("dnf", vec!["install", "-y", "yt-dlp"]),
+                ("pacman", vec!["-S", "--noconfirm", "yt-dlp"]),
+                ("zypper", vec!["install", "-y", "yt-dlp"]),
+
                 // Container package managers
-                ("snap", &["install", "yt-dlp"]),
-                ("flatpak", &["install", "flathub", "io.github.yt-dlp"]),
+                ("snap", vec!["install", "yt-dlp"]),
+                ("flatpak", vec!["install", "flathub", "io.github.yt-dlp"]),
             ];
             
             for (pkg_manager, args) in package_managers {
@@ -1330,13 +1330,13 @@ fn install_ytdlp() -> Result<(), AppError> {
                     debug!("Trying to install yt-dlp with: {} {}", pkg_manager, args.join(" "));
                     
                     // Most package managers need sudo, except for some (snap, flatpak)
-                    let need_sudo = !["snap", "flatpak"].contains(pkg_manager);
+                    let need_sudo = !["snap", "flatpak"].contains(&pkg_manager);
                     
                     if need_sudo {
                         println!("Using sudo {} to install yt-dlp...", pkg_manager);
                         match Command::new("sudo")
                             .arg(pkg_manager)
-                            .args(args)
+                            .args(&args)
                             .output() {
                                 Ok(output) => {
                                     if output.status.success() {
@@ -1350,7 +1350,7 @@ fn install_ytdlp() -> Result<(), AppError> {
                     } else {
                         println!("Using {} to install yt-dlp...", pkg_manager);
                         match Command::new(pkg_manager)
-                            .args(args)
+                            .args(&args)
                             .output() {
                                 Ok(output) => {
                                     if output.status.success() {
@@ -1369,9 +1369,9 @@ fn install_ytdlp() -> Result<(), AppError> {
         // macOS specific package managers
         #[cfg(target_os = "macos")]
         {
-            let package_managers = [
-                ("brew", &["install", "yt-dlp"]),
-                ("port", &["install", "yt-dlp"]),
+            let package_managers: Vec<(&str, Vec<&str>)> = vec![
+                ("brew", vec!["install", "yt-dlp"]),
+                ("port", vec!["install", "yt-dlp"]),
             ];
             
             for (pkg_manager, args) in package_managers {
@@ -1383,7 +1383,7 @@ fn install_ytdlp() -> Result<(), AppError> {
                         println!("Using sudo {} to install yt-dlp...", pkg_manager);
                         match Command::new("sudo")
                             .arg(pkg_manager)
-                            .args(args)
+                            .args(&args)
                             .output() {
                                 Ok(output) => {
                                     if output.status.success() {
@@ -1397,7 +1397,7 @@ fn install_ytdlp() -> Result<(), AppError> {
                     } else {
                         println!("Using {} to install yt-dlp...", pkg_manager);
                         match Command::new(pkg_manager)
-                            .args(args)
+                            .args(&args)
                             .output() {
                                 Ok(output) => {
                                     if output.status.success() {
@@ -1417,10 +1417,10 @@ fn install_ytdlp() -> Result<(), AppError> {
         #[cfg(target_os = "windows")]
         {
             // Try popular Windows package managers
-            let package_managers = [
-                ("choco", &["install", "yt-dlp", "-y"]),
-                ("scoop", &["install", "yt-dlp"]),
-                ("winget", &["install", "yt-dlp"]),
+            let package_managers: Vec<(&str, Vec<&str>)> = vec![
+                ("choco", vec!["install", "yt-dlp", "-y"]),
+                ("scoop", vec!["install", "yt-dlp"]),
+                ("winget", vec!["install", "yt-dlp"]),
             ];
             
             for (pkg_manager, args) in package_managers {
@@ -1429,7 +1429,7 @@ fn install_ytdlp() -> Result<(), AppError> {
                     println!("Using {} to install yt-dlp...", pkg_manager);
                     
                     match Command::new(pkg_manager)
-                        .args(args)
+                        .args(&args)
                         .output() {
                             Ok(output) => {
                                 if output.status.success() {
@@ -1601,18 +1601,18 @@ fn install_ffmpeg() -> Result<(), AppError> {
     // Linux installation with various package managers
     #[cfg(target_os = "linux")]
     {
-        let package_managers = [
+        let package_managers: Vec<(&str, Vec<&str>)> = vec![
             // Standard package managers
-            ("apt", &["install", "-y", "ffmpeg"]),
-            ("apt-get", &["install", "-y", "ffmpeg"]),
-            ("dnf", &["install", "-y", "ffmpeg"]),
-            ("yum", &["install", "-y", "ffmpeg"]),
-            ("pacman", &["-S", "--noconfirm", "ffmpeg"]),
-            ("zypper", &["install", "-y", "ffmpeg"]),
+            ("apt", vec!["install", "-y", "ffmpeg"]),
+            ("apt-get", vec!["install", "-y", "ffmpeg"]),
+            ("dnf", vec!["install", "-y", "ffmpeg"]),
+            ("yum", vec!["install", "-y", "ffmpeg"]),
+            ("pacman", vec!["-S", "--noconfirm", "ffmpeg"]),
+            ("zypper", vec!["install", "-y", "ffmpeg"]),
             
             // Container-based package managers
-            ("snap", &["install", "ffmpeg"]),
-            ("flatpak", &["install", "flathub", "org.ffmpeg.FFmpeg"]),
+            ("snap", vec!["install", "ffmpeg"]),
+            ("flatpak", vec!["install", "flathub", "org.ffmpeg.FFmpeg"]),
         ];
         
         for (pm, args) in package_managers.iter() {
@@ -1626,7 +1626,7 @@ fn install_ffmpeg() -> Result<(), AppError> {
                 println!("Using {} to install ffmpeg...", pm);
                 
                 // We need sudo for most package managers, but not for snap or flatpak
-                let need_sudo = !["snap", "flatpak"].contains(pm);
+                let need_sudo = !["snap", "flatpak"].contains(&pm);
                 
                 if need_sudo {
                     let sudo_command = "sudo".to_string();
